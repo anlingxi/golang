@@ -73,21 +73,29 @@ func (s *searchService) HybridSearch(ctx context.Context, query string, topK int
 	log.Info("[SearchService] 步骤3: 开始构建 Elasticsearch 两阶段混合搜索查询")
 	var buf bytes.Buffer
 	esQuery := map[string]interface{}{
+		// 这是稠密向量查询？
 		"knn": map[string]interface{}{
 			"field":          "vector",
 			"query_vector":   queryVector,
 			"k":              topK * 30,
 			"num_candidates": topK * 30,
 		},
+		// 那里体现了BM25的部分是 query.bool.must.match.text_content，且用的是规范化后的查询（normalized），以增强关键词信号
+		// 包含的过滤条件（filter）确保了权限控制与标签过滤与 Java 版本保持一致
+		// 这个过滤条件是一个 bool filter，包含 should 条件，要求满足以下三者之一：
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
 				"must": map[string]interface{}{
 					"match": map[string]interface{}{
 <<<<<<< HEAD
+<<<<<<< HEAD
 						"text_content": normalized,
 =======
 						"text_content": normalized, // 用规范化后的查询进行 BM25 匹配，增强关键词信号
 >>>>>>> 36dc5c1 (first commit)
+=======
+						"text_content": normalized, // 用规范化后的查询进行 BM25 匹配，增强关键词信号
+>>>>>>> e84a998 (first commit)
 					},
 				},
 				"filter": map[string]interface{}{

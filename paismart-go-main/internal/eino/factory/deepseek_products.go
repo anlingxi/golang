@@ -4,13 +4,9 @@ import (
 	"context"
 	"fmt"
 
-<<<<<<< HEAD
-	einoembedding "github.com/cloudwego/eino/components/embedding"
-=======
 	einoopenaiemb "github.com/cloudwego/eino-ext/components/embedding/openai"
 	einoembedding "github.com/cloudwego/eino/components/embedding"
 	fmodel "github.com/cloudwego/eino/components/model"
->>>>>>> 36dc5c1 (first commit)
 
 	"pai-smart-go/internal/config"
 	einochat "pai-smart-go/internal/eino/chat"
@@ -31,12 +27,7 @@ func (c *DefaultMessageConverter) ToSchemaMessages(msgs []einotypes.BusinessChat
 
 // DeepSeekProducts 是 DeepSeek provider 对应的一整组 AI 产品。
 type DeepSeekProducts struct {
-<<<<<<< HEAD
-	chatModel interface { /* service.ChatModel */
-	}
-=======
 	chatModel        *einochat.DeepSeekChatModel
->>>>>>> 36dc5c1 (first commit)
 	messageConverter einotypes.MessageConverter
 
 	// 改成官方 Eino Embedder
@@ -54,8 +45,6 @@ func NewDeepSeekProducts(ctx context.Context, cfg config.EinoConfig) (AIProducts
 	// 第一批先把接口打通。
 	// 第二批在这里接真实的 DeepSeek / OpenAI-compatible Eino embedder。
 	var embedder einoembedding.Embedder
-<<<<<<< HEAD
-=======
 	if cfg.Embedding.APIKey != "" && cfg.Embedding.BaseURL != "" {
 		embedder, err = einoopenaiemb.NewEmbedder(ctx, &einoopenaiemb.EmbeddingConfig{
 			APIKey:     cfg.Embedding.APIKey,
@@ -67,7 +56,6 @@ func NewDeepSeekProducts(ctx context.Context, cfg config.EinoConfig) (AIProducts
 			return nil, fmt.Errorf("failed to create eino embedder: %w", err)
 		}
 	}
->>>>>>> 36dc5c1 (first commit)
 
 	return &DeepSeekProducts{
 		chatModel:        chatModel,
@@ -82,15 +70,11 @@ func NewDeepSeekProducts(ctx context.Context, cfg config.EinoConfig) (AIProducts
 }
 
 func (p *DeepSeekProducts) ChatModel() service.ChatModel {
-<<<<<<< HEAD
-	return p.chatModel.(service.ChatModel)
-=======
 	return p.chatModel
 }
 
 func (p *DeepSeekProducts) EinoChatModel() fmodel.ToolCallingChatModel {
 	return p.chatModel.EinoModel()
->>>>>>> 36dc5c1 (first commit)
 }
 
 func (p *DeepSeekProducts) MessageConverter() einotypes.MessageConverter {
