@@ -79,6 +79,46 @@ eino:
   callback:
     enable_logging: true
     enable_trace: false
+<<<<<<< HEAD
+=======
+  embedding:                                    # ← 新增整个段
+    provider: "dashscope"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: "your-dashscope-api-key"
+    model: "text-embedding-v4"
+    dimensions: 2048
+  agent:
+    tools:
+      knowledge_search:
+        enabled: true
+        default_top_k: 5
+        max_top_k: 10
+      list_documents:
+        enabled: true
+        default_limit: 20
+        max_limit: 100
+      current_time:
+        enabled: true
+        default_timezone: "Asia/Shanghai"
+      web_search:
+        enabled: false
+        provider: "tavily"
+        base_url: "https://api.tavily.com"
+        api_key: ""
+        timeout_seconds: 10
+        proxy_url: ""
+        default_max_results: 5
+        max_max_results: 10
+        search_depth: "basic"
+      git_query:
+        enabled: false
+        base_url: "https://api.github.com"
+        api_key: ""
+        timeout_seconds: 10
+        proxy_url: ""
+        max_file_chars: 12000
+        allow_repos: []
+>>>>>>> 36dc5c1 (first commit)
 
 rabbitmq:
   url: "amqp://guest:guest@127.0.0.1:5672/"
@@ -95,4 +135,8 @@ document:
   splitter:
     type: "recursive"
     chunk_size: 1000
+<<<<<<< HEAD
     chunk_overlap: 100
+=======
+    chunk_overlap: 100
+>>>>>>> 36dc5c1 (first commit)

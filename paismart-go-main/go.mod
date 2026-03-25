@@ -33,7 +33,7 @@ require (
 	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/meguminnnnnnnnn/go-openai v0.1.1 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/nikolalohinski/gonja v1.5.3 // indirect
@@ -42,7 +42,7 @@ require (
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
-	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1 // indirect
+	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -56,6 +56,7 @@ require (
 	github.com/cloudwego/eino-ext/components/document/parser/html v0.0.0-20260316121515-014a29323bbe
 	github.com/cloudwego/eino-ext/components/document/parser/pdf v0.0.0-20260316121515-014a29323bbe
 	github.com/cloudwego/eino-ext/components/document/transformer/splitter/semantic v0.0.0-20260316121515-014a29323bbe
+	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260323112355-f061db7e8419
 	github.com/cloudwego/eino-ext/components/indexer/es7 v0.0.0-20260316121515-014a29323bbe
 	github.com/cloudwego/eino-ext/components/indexer/es8 v0.0.0-20260316121515-014a29323bbe
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.8

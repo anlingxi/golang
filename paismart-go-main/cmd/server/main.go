@@ -11,7 +11,14 @@ import (
 	aihistory "pai-smart-go/internal/ai/history"
 	"pai-smart-go/internal/config"
 	einocallbacks "pai-smart-go/internal/eino/callbacks"
+<<<<<<< HEAD
 	"pai-smart-go/internal/eino/factory"
+=======
+	documentbuilder "pai-smart-go/internal/eino/document/builder"
+	"pai-smart-go/internal/eino/factory"
+	einotools "pai-smart-go/internal/eino/tools"
+	"pai-smart-go/internal/handler"
+>>>>>>> 36dc5c1 (first commit)
 	"pai-smart-go/internal/infra/cache"
 	"pai-smart-go/internal/infra/mq/rabbitmq"
 	"pai-smart-go/internal/middleware"
@@ -163,6 +170,7 @@ func main() {
 	}()
 
 	// 6. 初始化文件处理管道 (Processor)
+<<<<<<< HEAD
 	products, err := aiProductsFactory.Create(ctx, cfg.Eino)
 	if err != nil {
 		log.Errorf("failed to create AI products: %v", err)
@@ -174,6 +182,14 @@ func main() {
 		*cfg,
 		products,
 		docVectorRepo,
+=======
+	docPipeline, err := documentbuilder.NewPipeline(
+		context.Background(),
+		cfg,           // config.Config
+		es.ESClient,   // *elasticsearch.Client
+		products,      // factory.AIProducts（第 85 行已创建）
+		docVectorRepo, // repository.DocumentVectorRepository
+>>>>>>> 36dc5c1 (first commit)
 	)
 	if err != nil {
 		log.Errorf("failed to init document pipeline: %v", err)
@@ -197,6 +213,17 @@ func main() {
 	r.Use(middleware.RequestLogger(), gin.Recovery())
 
 	// 9. 注册路由
+<<<<<<< HEAD
+=======
+	toolBuilder, err := einotools.NewBuilder(cfg.Eino.Agent.Tools, searchService, documentService)
+	if err != nil {
+		log.Errorf("init agent tool builder failed: %v", err)
+		return
+	}
+
+	agentHandler := handler.NewAgentHandler(products, toolBuilder)
+
+>>>>>>> 36dc5c1 (first commit)
 	router.RegisterRoutes(
 		r,
 		jwtManager,
@@ -208,6 +235,10 @@ func main() {
 		conversationService,
 		conversationRepo,
 		helperManager,
+<<<<<<< HEAD
+=======
+		agentHandler,
+>>>>>>> 36dc5c1 (first commit)
 	)
 
 	// 启动 HTTP 服务器并实现优雅停机

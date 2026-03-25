@@ -10,6 +10,10 @@ import (
 	"pai-smart-go/internal/model"
 	"pai-smart-go/internal/repository"
 	"pai-smart-go/pkg/storage"
+<<<<<<< HEAD
+=======
+	"pai-smart-go/pkg/tika"
+>>>>>>> 36dc5c1 (first commit)
 	"strings"
 	"time"
 
@@ -50,11 +54,19 @@ type documentService struct {
 	userRepo   repository.UserRepository
 	orgTagRepo repository.OrgTagRepository
 	minioCfg   config.MinIOConfig
+<<<<<<< HEAD
 	loaderSvc  *loader.Service
 }
 
 // NewDocumentService 创建一个新的 DocumentService 实例。
 func NewDocumentService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, orgTagRepo repository.OrgTagRepository, minioCfg config.MinIOConfig, loaderSvc *loader.Service) DocumentService {
+=======
+	loaderSvc  *tika.Client
+}
+
+// NewDocumentService 创建一个新的 DocumentService 实例。
+func NewDocumentService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, orgTagRepo repository.OrgTagRepository, minioCfg config.MinIOConfig, loaderSvc *tika.Client) DocumentService {
+>>>>>>> 36dc5c1 (first commit)
 	return &documentService{
 		uploadRepo: uploadRepo,
 		userRepo:   userRepo,
@@ -161,6 +173,7 @@ func (s *documentService) GetFilePreviewContent(fileName string, user *model.Use
 		return nil, errors.New("文件不存在或无权访问")
 	}
 
+<<<<<<< HEAD
 	// 从 MinIO 获取文件对象
 	docs, err := s.loaderSvc.LoadFromMinIO(context.Background(), loader.LoadRequest{
 		Bucket:     s.minioCfg.BucketName,
@@ -178,6 +191,21 @@ func (s *documentService) GetFilePreviewContent(fileName string, user *model.Use
 	if len(docs) > 0 {
 		content = docs[0].Content
 	}
+=======
+	objectName := fmt.Sprintf("uploads/%d/%s", targetFile.UserID, targetFile.FileName)
+	object, err := storage.MinioClient.GetObject(
+		context.Background(),
+		s.minioCfg.BucketName,
+		objectName,
+		minio.GetObjectOptions{},
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer object.Close()
+
+	content, err := s.loaderSvc.ExtractText(object, targetFile.FileName)
+>>>>>>> 36dc5c1 (first commit)
 	if err != nil {
 		return nil, err
 	}

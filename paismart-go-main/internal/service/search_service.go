@@ -83,7 +83,11 @@ func (s *searchService) HybridSearch(ctx context.Context, query string, topK int
 			"bool": map[string]interface{}{
 				"must": map[string]interface{}{
 					"match": map[string]interface{}{
+<<<<<<< HEAD
 						"text_content": normalized,
+=======
+						"text_content": normalized, // 用规范化后的查询进行 BM25 匹配，增强关键词信号
+>>>>>>> 36dc5c1 (first commit)
 					},
 				},
 				"filter": map[string]interface{}{
