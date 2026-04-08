@@ -44,6 +44,7 @@ func NewPipeline(
 	esClient *elasticsearch.Client,
 	products factory.AIProducts,
 	docVectorRepo repository.DocumentVectorRepository,
+	uploadRepo repository.UploadRepository,
 ) (*documentpipeline.Service, error) {
 	tikaClient := tika.NewClient(cfg.Tika)
 
@@ -151,5 +152,6 @@ func NewPipeline(
 		indexer,
 		products.EinoEmbedder(),
 		docVectorRepo,
+		uploadRepo,
 	), nil
 }

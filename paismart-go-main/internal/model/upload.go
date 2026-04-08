@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+const (
+	ProcessStatusPending    = 0
+	ProcessStatusProcessing = 1
+	ProcessStatusCompleted  = 2
+	ProcessStatusFailed     = 3
+)
+
 type FileUpload struct {
 	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
 	FileMD5   string `gorm:"type:varchar(32);not null;index:idx_file_upload_md5_user,priority:1" json:"fileMd5"`

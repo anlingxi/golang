@@ -172,6 +172,7 @@ func main() {
 		es.ESClient,   // *elasticsearch.Client
 		products,      // factory.AIProducts（第 85 行已创建）
 		docVectorRepo, // repository.DocumentVectorRepository
+		uploadRepo,
 	)
 	if err != nil {
 		log.Errorf("failed to init document pipeline: %v", err)

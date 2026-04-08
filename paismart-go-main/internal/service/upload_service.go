@@ -208,12 +208,34 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		log.Errorf("[MergeChunks] 合并分片失败：从Redis检查分片完整性时出错, error: %v", err)
 		return "", fmt.Errorf("failed to get uploaded chunks from redis: %w", err)
 	}
+
+	// Redis 可能因重启导致 bitmap 不完整，以 MySQL chunk_info 进行二次核验
+	if len(uploadedIndexes) < totalChunks {
+		dbChunks, dbErr := s.uploadRepo.GetChunkInfoRecords(fileMD5)
+		if dbErr == nil {
+			dbSet := make(map[int]struct{})
+			for _, c := range dbChunks {
+				if c.ChunkIndex < totalChunks {
+					dbSet[c.ChunkIndex] = struct{}{}
+				}
+			}
+			if len(dbSet) >= totalChunks {
+				log.Infof("[MergeChunks] Redis 数据不完整，MySQL 确认所有分片已上传，继续合并。文件MD5: %s", fileMD5)
+				uploadedIndexes = make([]int, 0, len(dbSet))
+				for idx := range dbSet {
+					uploadedIndexes = append(uploadedIndexes, idx)
+				}
+			}
+		}
+	}
 	if len(uploadedIndexes) < totalChunks {
 		log.Warnf("[MergeChunks] 拒绝合并请求：分片未完全上传。文件MD5: %s, 期望分片数: %d, 实际分片数: %d", fileMD5, totalChunks, len(uploadedIndexes))
 		return "", fmt.Errorf("分片未全部上传，无法合并 (期望: %d, 实际: %d)", totalChunks, len(uploadedIndexes))
 	}
 
 	// 2. 根据分片数量选择合并策略
+	// 如果是不同用户上传相同文件，这里是不是就覆盖了？需要在 MinIO 中使用用户ID区分存储路径，或者在数据库中记录不同用户的上传记录。当前实现中，文件MD5和用户ID共同决定一条上传记录，因此同一文件MD5的不同用户会有不同的记录和分片路径，不会互相覆盖。
+	// 如果用用户id区分存储路径，则objectName需要包含用户ID，例如：fmt.Sprintf("chunks/%d/%s/%d", userID, fileMD5, chunkIndex)，合并时也要相应调整。这种方式可以更好地支持多用户上传同一文件的场景，避免冲突。
 	destObjectName := fmt.Sprintf("merged/%s", fileName) // 与 Java 一致的路径
 
 	if totalChunks == 1 {

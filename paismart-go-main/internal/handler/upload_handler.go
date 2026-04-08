@@ -2,12 +2,13 @@
 package handler
 
 import (
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"pai-smart-go/internal/service"
 	"pai-smart-go/pkg/log"
 	"pai-smart-go/pkg/token"
 	"strconv"
+
+	"github.com/gin-gonic/gin"
 )
 
 // calculateProgress is a helper function to calculate upload progress.
@@ -161,6 +162,7 @@ func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 	}
 
 	claims, _ := c.Get("claims")
+
 	userClaims := claims.(*token.CustomClaims)
 	userID := userClaims.UserID
 

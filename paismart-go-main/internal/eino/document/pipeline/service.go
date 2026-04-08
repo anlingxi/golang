@@ -31,6 +31,7 @@ type Service struct {
 	embedder    einoembedding.Embedder
 
 	docVectorRepo repository.DocumentVectorRepository
+	uploadRepo    repository.UploadRepository
 }
 
 func NewService(
@@ -40,6 +41,7 @@ func NewService(
 	indexer einoindexer.Indexer,
 	embedder einoembedding.Embedder,
 	docVectorRepo repository.DocumentVectorRepository,
+	uploadRepo repository.UploadRepository,
 ) *Service {
 	return &Service{
 		minioBucket:   minioBucket,
@@ -48,10 +50,39 @@ func NewService(
 		indexer:       indexer,
 		embedder:      embedder,
 		docVectorRepo: docVectorRepo,
+		uploadRepo:    uploadRepo,
 	}
 }
 
-func (s *Service) Process(ctx context.Context, req ProcessRequest) (*ProcessResult, error) {
+func (s *Service) Process(ctx context.Context, req ProcessRequest) (result *ProcessResult, err error) {
+	acquired, err := s.uploadRepo.TryMarkFileProcessing(req.FileMD5, req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("mark file processing failed: %w", err)
+	}
+	if !acquired {
+		log.Infof("[DocumentPipeline] skip duplicated task file_md5=%s user_id=%d", req.FileMD5, req.UserID)
+		return &ProcessResult{
+			FileMD5:    req.FileMD5,
+			FileName:   req.FileName,
+			ChunkCount: 0,
+		}, nil
+	}
+
+	stage := "fetching"
+	var chunkCount int
+	defer func() {
+		if err == nil {
+			if completeErr := s.uploadRepo.MarkFileProcessingCompleted(req.FileMD5, req.UserID, chunkCount); completeErr != nil {
+				log.Errorf("[DocumentPipeline] mark completed failed file_md5=%s user_id=%d err=%v", req.FileMD5, req.UserID, completeErr)
+				err = fmt.Errorf("mark file processing completed failed: %w", completeErr)
+			}
+			return
+		}
+		if failErr := s.uploadRepo.MarkFileProcessingFailed(req.FileMD5, req.UserID, stage, err.Error()); failErr != nil {
+			log.Errorf("[DocumentPipeline] mark failed failed file_md5=%s user_id=%d err=%v", req.FileMD5, req.UserID, failErr)
+		}
+	}()
+
 	// 1. 从 MinIO 获取文件内容
 	object, err := storage.MinioClient.GetObject(ctx, s.minioBucket, req.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
@@ -67,6 +98,7 @@ func (s *Service) Process(ctx context.Context, req ProcessRequest) (*ProcessResu
 		return nil, fmt.Errorf("empty file content")
 	}
 	// 2. 解析、转换、入库、建索引
+	stage = "parsing"
 	extraMeta := map[string]any{
 		"file_md5":  req.FileMD5,
 		"file_name": req.FileName,
@@ -91,6 +123,7 @@ func (s *Service) Process(ctx context.Context, req ProcessRequest) (*ProcessResu
 	}
 	// 调用eino的transformer对初始doc进行转换，生成最终要入库和建索引的chunk级别的doc对象，meta里会自动带上chunk_id等信息，
 	// 我们也会补齐一些必要的meta字段（比如file_md5、user_id等）以方便后续入库和建索引使用
+	stage = "transforming"
 	chunks, err := s.transformer.Transform(ctx, docs)
 	if err != nil {
 		return nil, fmt.Errorf("transform document failed: %w", err)
@@ -98,6 +131,7 @@ func (s *Service) Process(ctx context.Context, req ProcessRequest) (*ProcessResu
 	if len(chunks) == 0 {
 		return nil, fmt.Errorf("no chunks generated")
 	}
+	chunkCount = len(chunks)
 	for i, doc := range chunks {
 		if doc.MetaData == nil {
 			doc.MetaData = map[string]any{}
@@ -120,12 +154,16 @@ func (s *Service) Process(ctx context.Context, req ProcessRequest) (*ProcessResu
 		}
 	}
 
-	if err := s.persistChunks(ctx, req, chunks); err != nil {
+	stage = "persisting"
+	err = s.persistChunks(ctx, req, chunks)
+	if err != nil {
 		return nil, err
 	}
 
 	// 可选：先把这批 chunk 标记成 indexing
-	if err := s.markChunksIndexing(ctx, req.FileMD5, len(chunks)); err != nil {
+	stage = "indexing"
+	err = s.markChunksIndexing(ctx, req.FileMD5, len(chunks))
+	if err != nil {
 		return nil, fmt.Errorf("mark chunks indexing failed: %w", err)
 	}
 
@@ -139,19 +177,21 @@ func (s *Service) Process(ctx context.Context, req ProcessRequest) (*ProcessResu
 		}
 
 		// 写 ES 成功，按顺序回写 indexed
-		if err := s.markChunksIndexed(ctx, req.FileMD5, storedIDs); err != nil {
+		err = s.markChunksIndexed(ctx, req.FileMD5, storedIDs)
+		if err != nil {
 			return nil, fmt.Errorf("mark chunks indexed failed: %w", err)
 		}
 	}
 
 	log.Infof("[DocumentPipeline] processed file=%s chunks=%d indexed=%d", req.FileName, len(chunks), len(storedIDs))
 
-	return &ProcessResult{
+	result = &ProcessResult{
 		FileMD5:      req.FileMD5,
 		FileName:     req.FileName,
 		ChunkCount:   len(chunks),
 		StoredDocIDs: storedIDs,
-	}, nil
+	}
+	return result, nil
 }
 
 func (s *Service) persistChunks(ctx context.Context, req ProcessRequest, docs []*schema.Document) error {

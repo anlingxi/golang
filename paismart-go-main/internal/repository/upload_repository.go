@@ -4,7 +4,9 @@ package repository
 import (
 	"context"
 	"pai-smart-go/internal/model"
+	"pai-smart-go/pkg/log"
 	"strconv"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
@@ -16,6 +18,9 @@ type UploadRepository interface {
 	CreateFileUploadRecord(record *model.FileUpload) error
 	GetFileUploadRecord(fileMD5 string, userID uint) (*model.FileUpload, error)
 	UpdateFileUploadStatus(recordID uint, status int) error
+	TryMarkFileProcessing(fileMD5 string, userID uint) (bool, error)
+	MarkFileProcessingCompleted(fileMD5 string, userID uint, chunkCount int) error
+	MarkFileProcessingFailed(fileMD5 string, userID uint, stage string, processErr string) error
 	FindFilesByUserID(userID uint) ([]model.FileUpload, error)
 	FindAccessibleFiles(userID uint, orgTags []string) ([]model.FileUpload, error)
 	DeleteFileUploadRecord(fileMD5 string, userID uint) error
@@ -79,6 +84,46 @@ func (r *uploadRepository) UpdateFileUploadStatus(recordID uint, status int) err
 	return r.db.Model(&model.FileUpload{}).Where("id = ?", recordID).Update("status", status).Error
 }
 
+func (r *uploadRepository) TryMarkFileProcessing(fileMD5 string, userID uint) (bool, error) {
+	result := r.db.Model(&model.FileUpload{}).
+		Where("file_md5 = ? AND user_id = ? AND process_status IN ?", fileMD5, userID, []int{
+			model.ProcessStatusPending,
+			model.ProcessStatusFailed,
+		}).
+		Updates(map[string]any{
+			"process_status": model.ProcessStatusProcessing,
+			"process_stage":  "processing",
+			"process_error":  "",
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *uploadRepository) MarkFileProcessingCompleted(fileMD5 string, userID uint, chunkCount int) error {
+	now := time.Now()
+	return r.db.Model(&model.FileUpload{}).
+		Where("file_md5 = ? AND user_id = ?", fileMD5, userID).
+		Updates(map[string]any{
+			"process_status": model.ProcessStatusCompleted,
+			"process_stage":  "indexed",
+			"process_error":  "",
+			"chunk_count":    chunkCount,
+			"processed_at":   &now,
+		}).Error
+}
+
+func (r *uploadRepository) MarkFileProcessingFailed(fileMD5 string, userID uint, stage string, processErr string) error {
+	return r.db.Model(&model.FileUpload{}).
+		Where("file_md5 = ? AND user_id = ?", fileMD5, userID).
+		Updates(map[string]any{
+			"process_status": model.ProcessStatusFailed,
+			"process_stage":  stage,
+			"process_error":  processErr,
+		}).Error
+}
+
 // GetChunkInfoRecords 获取指定文件已上传的所有分块信息 (from DB, used for merge)。
 func (r *uploadRepository) GetChunkInfoRecords(fileMD5 string) ([]model.ChunkInfo, error) {
 	var chunks []model.ChunkInfo
@@ -125,18 +170,27 @@ func (r *uploadRepository) CreateChunkInfoRecord(record *model.ChunkInfo) error 
 func (r *uploadRepository) IsChunkUploaded(ctx context.Context, fileMD5 string, userID uint, chunkIndex int) (bool, error) {
 	key := r.getRedisUploadKey(fileMD5, userID)
 	val, err := r.redisClient.GetBit(ctx, key, int64(chunkIndex)).Result()
-	if err != nil {
-		// If the key doesn't exist, Redis doesn't return an error, but a value of 0.
-		// So we only need to handle actual errors.
-		return false, err
+	if err == nil {
+		return val == 1, nil
 	}
-	return val == 1, nil
+
+	// Redis 不可用，降级到 MySQL
+	log.Warnf("[UploadRepo] Redis 不可用，降级到 MySQL (IsChunkUploaded), fileMD5=%s, chunkIndex=%d, err=%v",
+		fileMD5, chunkIndex, err)
+	return r.isChunkUploadedFromDB(fileMD5, chunkIndex)
+
 }
 
 // MarkChunkUploaded marks a chunk as uploaded in Redis.
 func (r *uploadRepository) MarkChunkUploaded(ctx context.Context, fileMD5 string, userID uint, chunkIndex int) error {
 	key := r.getRedisUploadKey(fileMD5, userID)
-	return r.redisClient.SetBit(ctx, key, int64(chunkIndex), 1).Err()
+	err := r.redisClient.SetBit(ctx, key, int64(chunkIndex), 1).Err()
+	if err != nil {
+		// MySQL 已持久化，降级为 no-op，不向上返回错误
+		log.Warnf("[UploadRepo] Redis 不可用，跳过 Redis 标记 (MarkChunkUploaded), fileMD5=%s, chunkIndex=%d, err=%v",
+			fileMD5, chunkIndex, err)
+	}
+	return nil
 }
 
 // GetUploadedChunksFromRedis retrieves the list of uploaded chunk indexes from Redis bitmap.
@@ -147,26 +201,81 @@ func (r *uploadRepository) GetUploadedChunksFromRedis(ctx context.Context, fileM
 	}
 	key := r.getRedisUploadKey(fileMD5, userID)
 	bitmap, err := r.redisClient.Get(ctx, key).Bytes()
-	if err != nil {
-		if err == redis.Nil {
-			return []int{}, nil // Key doesn't exist, no chunks uploaded
+	if err == nil {
+		uploaded := make([]int, 0)
+		for i := 0; i < totalChunks; i++ {
+			byteIndex := i / 8
+			bitIndex := i % 8
+			if byteIndex < len(bitmap) && (bitmap[byteIndex]>>(7-bitIndex))&1 == 1 {
+				uploaded = append(uploaded, i)
+			}
 		}
-		return nil, err
+		return uploaded, nil
 	}
 
-	uploaded := make([]int, 0)
-	for i := 0; i < totalChunks; i++ {
-		byteIndex := i / 8
-		bitIndex := i % 8
-		if byteIndex < len(bitmap) && (bitmap[byteIndex]>>(7-bitIndex))&1 == 1 {
-			uploaded = append(uploaded, i)
+	if err == redis.Nil {
+		// 键不存在：可能是 Redis 重启丢失数据，查 MySQL 并尝试回填 Redis
+		chunks, dbErr := r.getUploadedChunksFromDB(fileMD5, totalChunks)
+		if dbErr != nil {
+			return nil, dbErr
 		}
+		// 回填：将 MySQL 中已上传的分片状态写回 Redis bitmap
+		// 此处 Redis 确实可达（能收到 Nil 响应），回填大概率成功
+		if len(chunks) > 0 {
+			for _, idx := range chunks {
+				if setErr := r.redisClient.SetBit(ctx, key, int64(idx), 1).Err(); setErr != nil {
+					log.Warnf("[UploadRepo] Redis 回填失败, fileMD5=%s, chunkIndex=%d, err=%v",
+						fileMD5, idx, setErr)
+					break // 回填失败说明 Redis 又出问题了，不必继续
+				}
+			}
+		}
+		return chunks, nil
 	}
-	return uploaded, nil
+
+	if err != redis.Nil {
+		log.Warnf("[UploadRepo] Redis 不可用，降级到 MySQL (GetUploadedChunks), fileMD5=%s, err=%v", fileMD5, err)
+	}
+	// redis.Nil 或连接错误，均查 MySQL
+	return r.getUploadedChunksFromDB(fileMD5, totalChunks)
 }
 
 // DeleteUploadMark deletes the upload status key from Redis.
 func (r *uploadRepository) DeleteUploadMark(ctx context.Context, fileMD5 string, userID uint) error {
 	key := r.getRedisUploadKey(fileMD5, userID)
-	return r.redisClient.Del(ctx, key).Err()
+	err := r.redisClient.Del(ctx, key).Err()
+	if err != nil {
+		log.Warnf("[UploadRepo] Redis 不可用，跳过 Redis 清理 (DeleteUploadMark), fileMD5=%s, err=%v", fileMD5, err)
+	}
+	return nil
+}
+
+// 新增私有查询
+// isChunkUploadedFromDB 在 Redis 不可用时，从 chunk_info 表核验分片是否已上传。
+func (r *uploadRepository) isChunkUploadedFromDB(fileMD5 string, chunkIndex int) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.ChunkInfo{}).
+		Where("file_md5 = ? AND chunk_index = ?", fileMD5, chunkIndex).
+		Count(&count).Error
+	return count > 0, err
+}
+
+// getUploadedChunksFromDB 在 Redis 不可用时，从 chunk_info 表获取已上传分片索引列表。
+func (r *uploadRepository) getUploadedChunksFromDB(fileMD5 string, totalChunks int) ([]int, error) {
+	var chunks []model.ChunkInfo
+	err := r.db.Where("file_md5 = ? AND chunk_index < ?", fileMD5, totalChunks).
+		Select("chunk_index").
+		Find(&chunks).Error
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[int]struct{})
+	result := make([]int, 0, len(chunks))
+	for _, c := range chunks {
+		if _, exists := seen[c.ChunkIndex]; !exists {
+			seen[c.ChunkIndex] = struct{}{}
+			result = append(result, c.ChunkIndex)
+		}
+	}
+	return result, nil
 }
