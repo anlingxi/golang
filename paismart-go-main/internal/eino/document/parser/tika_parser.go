@@ -35,9 +35,9 @@ func (p *TikaParser) Parse(ctx context.Context, reader io.Reader, opts ...einopa
 	}
 
 	parsedOpts := &einoparser.Options{}
-	for _, opt := range opts {
-		opt(parsedOpts)
-	}
+	//for _, opt := range opts {
+	//opt(parsedOpts)
+	//}
 
 	fileName := "unknown"
 	if parsedOpts.URI != "" {
