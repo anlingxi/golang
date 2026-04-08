@@ -1,291 +1,284 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
 
-## Project Overview
+## Current Repo Reality
 
-PaiSmart (派聪明) is an enterprise-level AI knowledge base management system using RAG (Retrieval Augmented Generation) technology. This is the **Go backend implementation** of the system, which also includes a Vue 3 frontend and a homepage.
+This workspace is **not** a clean single-root monorepo anymore.
 
-**Core Architecture:**
-- Backend: Go (this repository)
-- Frontend: Vue 3 + TypeScript (in `frontend/` directory)
-- Homepage: Static site (in `homepage/` directory)
+- The repo root contains a partial snapshot: `cmd/`, `configs/`, `deployments/`, `docs/`, `frontend/`, `homepage/`, `go.mod`, `README.md`.
+- The **complete backend** and the **buildable homepage app** live in the nested directory: `paismart-go-main/`.
+- The root-level Go backend is incomplete: it has `cmd/server/main.go`, but it does **not** have root-level `internal/` or `pkg/`, so backend build commands fail from the repo root.
+- Several files are duplicated between the repo root and `paismart-go-main/` (for example `AGENTS.md`, `CLAUDE.md`, `docs/`, `deployments/`, `frontend/`).
 
-**Technology Stack:**
-- **Framework:** Gin (HTTP), WebSocket (real-time communication)
-- **Databases:** MySQL (metadata), Redis (caching), Elasticsearch 8.10.0 (vector search)
-- **Message Queue:** Kafka (async document processing)
-- **Object Storage:** MinIO (file storage)
-- **Document Processing:** Apache Tika (text extraction)
-- **AI Services:** DeepSeek/Ollama (LLM), Alibaba DashScope (embeddings)
-- **Security:** JWT authentication, role-based authorization
+When working on backend code, treat `paismart-go-main/` as the source-of-truth application root unless the task explicitly targets the outer snapshot.
 
-## Common Commands
+## Working Directories
 
-### Backend (Go)
+- Backend: `cd paismart-go-main`
+- Frontend: use repo-root `frontend/` by default; the same app is also duplicated under `paismart-go-main/frontend/`
+- Homepage: use `cd paismart-go-main/homepage`; repo-root `homepage/` only contains assets, not a complete app
+- Infra: `deployments/docker-compose.yaml` and `paismart-go-main/deployments/docker-compose.yaml` are duplicates
 
-```bash
-# Build the application
-go build -o bin/server cmd/server/main.go
+## Actual Code Structure
 
-# Run the server directly
-go run cmd/server/main.go
+### Outer repo root
 
-# Run tests (if tests exist)
-go test ./...
+The outer root currently contains:
 
-# Run tests for a specific package
-go test ./internal/service/...
+- Partial Go snapshot: `cmd/`, `configs/`, `deployments/`, `docs/`
+- Full frontend workspace: `frontend/`
+- Asset-only homepage snapshot: `homepage/`
+- A nested full application copy: `paismart-go-main/`
 
-# Update dependencies
-go mod tidy
-go mod download
+Important:
 
-# Format code
-go fmt ./...
+- Root `go.mod` is a minimal snapshot and does not reflect the real backend dependency graph.
+- Root `cmd/server/main.go` imports `pai-smart-go/internal/...` and `pai-smart-go/pkg/...`, but those packages do not exist at the outer root.
 
-# Lint (requires golangci-lint)
-golangci-lint run
+### Nested backend root: `paismart-go-main/`
+
+This is the actual backend/application tree:
+
+```text
+paismart-go-main/
+├── cmd/server/main.go
+├── configs/config.yaml
+├── deployments/docker-compose.yaml
+├── docs/ddl.sql
+├── frontend/
+├── homepage/
+├── initfile/
+├── internal/
+│   ├── ai/
+│   │   ├── helper/
+│   │   └── history/
+│   ├── app/bootstrap/
+│   ├── config/
+│   ├── eino/
+│   │   ├── callbacks/
+│   │   ├── chat/
+│   │   ├── document/
+│   │   ├── factory/
+│   │   ├── tools/
+│   │   └── types/
+│   ├── handler/
+│   ├── infra/
+│   │   ├── cache/
+│   │   └── mq/rabbitmq/
+│   ├── middleware/
+│   ├── model/
+│   ├── pipeline/
+│   ├── repository/
+│   ├── router/
+│   ├── seed/
+│   └── service/
+└── pkg/
+    ├── code/
+    ├── database/
+    ├── embedding/
+    ├── es/
+    ├── hash/
+    ├── kafka/
+    ├── log/
+    ├── storage/
+    ├── tasks/
+    ├── tika/
+    └── token/
 ```
 
-### Frontend (Vue 3)
+## Architecture Notes That Match The Current Code
+
+The older docs describe a simpler Gin + Kafka + RAG backend. That is only partially true now.
+
+### Still true
+
+- Gin is still the HTTP framework.
+- MySQL, Redis, MinIO, Tika, Kafka, and Elasticsearch are still part of the stack.
+- The document ingestion path still uses Kafka plus `internal/pipeline/`.
+- The app still uses layered `handler -> service -> repository` organization.
+
+### Newly present in the checked-in code
+
+- `internal/eino/` introduces a newer AI integration layer with:
+  - provider factories
+  - chat model adapters
+  - document pipeline builders
+  - tool builders
+  - callback plumbing
+- `internal/ai/helper/` and `internal/ai/history/` add helper/session/history management.
+- `internal/infra/mq/rabbitmq/` adds RabbitMQ producer/consumer code for async history persistence.
+- `internal/handler/agent_handler.go` adds an agent chat path for `/api/v1/agent/chat`.
+- `internal/router/router.go` centralizes route registration.
+- `internal/seed/seed.go` seeds files from `initfile/`.
+
+### Practical implication
+
+Do not document this repo as “Kafka-only async processing” anymore.
+
+Current code shows two async/message paths:
+
+- Kafka for document processing / ingestion
+- RabbitMQ for AI chat history persistence
+
+Do not document this repo as “plain RAG chat only” either.
+
+Current code also includes:
+
+- Eino-based chat model abstraction
+- tool-enabled agent chat
+- helper/history management modules
+
+## Frontend Reality
+
+The repo-root `frontend/` is a complete Vue 3 + TypeScript + Vite app.
+
+Observed structure includes:
+
+- `frontend/src/views/chat`
+- `frontend/src/views/chat-history`
+- `frontend/src/views/knowledge-base`
+- `frontend/src/views/org-tag`
+- `frontend/src/views/personal-center`
+- `frontend/src/views/user`
+- `frontend/src/router/elegant/routes.ts`
+- `frontend/packages/*` workspace packages:
+  - `alova`
+  - `axios`
+  - `color`
+  - `hooks`
+  - `materials`
+  - `ofetch`
+  - `scripts`
+  - `uno-preset`
+  - `utils`
+
+Frontend commands in the old docs are still broadly correct, but they should be run from the repo-root `frontend/`.
+
+## Homepage Reality
+
+The repo-root `homepage/` is not a complete standalone homepage app. It contains assets only.
+
+The actual homepage app is in:
+
+- `paismart-go-main/homepage/index.html`
+- `paismart-go-main/homepage/index.js`
+- `paismart-go-main/homepage/package.json`
+- `paismart-go-main/homepage/vite.config.js`
+
+If a task involves homepage development, work in `paismart-go-main/homepage/`.
+
+## Commands That Match The Current Repo
+
+### Backend
+
+```bash
+cd paismart-go-main
+go mod tidy
+go build ./cmd/server
+go run cmd/server/main.go
+```
+
+Do **not** run backend build or run commands from the outer repo root.
+
+### Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 pnpm install
-
-# Development server (test mode)
 pnpm run dev
-
-# Development server (prod mode)
 pnpm run dev:prod
-
-# Build for production
 pnpm run build
-
-# Build for test environment
 pnpm run build:test
-
-# Type checking
 pnpm run typecheck
-
-# Lint and fix
 pnpm run lint
-
-# Preview production build
-pnpm run preview
 ```
 
-### Docker & Infrastructure
+### Homepage
 
 ```bash
-# Start all services (MySQL, Redis, Kafka, Elasticsearch, MinIO, Tika)
-cd deployments
-docker-compose up -d
-
-# Stop all services
-docker-compose down
-
-# View logs
-docker-compose logs -f [service_name]
-
-# Rebuild and restart a specific service
-docker-compose up -d --build [service_name]
+cd paismart-go-main/homepage
+pnpm install
+pnpm run dev
+pnpm run build
 ```
 
-## Project Structure
+### Infrastructure
 
-### Backend Structure (Go)
-
-```
-pai-smart-go/
-├── cmd/server/main.go          # Application entry point, dependency injection
-├── configs/config.yaml         # Configuration file (NOT committed with secrets)
-├── internal/                   # Internal application code
-│   ├── config/                 # Config loading (Viper)
-│   ├── handler/                # HTTP/WebSocket handlers (Gin controllers)
-│   ├── middleware/             # Auth, logging, admin authorization
-│   ├── model/                  # Domain models and database entities
-│   ├── pipeline/               # Document processing pipeline (Tika → chunking → embedding → ES)
-│   ├── repository/             # Data access layer (GORM, Redis)
-│   └── service/                # Business logic layer
-├── pkg/                        # Reusable packages
-│   ├── database/               # MySQL, Redis initialization
-│   ├── embedding/              # Embedding client (DashScope)
-│   ├── es/                     # Elasticsearch client
-│   ├── hash/                   # Password hashing (bcrypt)
-│   ├── kafka/                  # Kafka producer/consumer
-│   ├── llm/                    # LLM client (DeepSeek/Ollama)
-│   ├── log/                    # Zap logger
-│   ├── storage/                # MinIO client
-│   ├── tika/                   # Tika document extraction
-│   └── token/                  # JWT token management
-└── docs/ddl.sql                # Database schema
+```bash
+docker compose -f deployments/docker-compose.yaml up -d
+docker compose -f deployments/docker-compose.yaml down
 ```
 
-### Frontend Structure (Vue 3)
+## Current Breakage / Incomplete Refactor State
 
+Do not assume the nested backend currently builds cleanly.
+
+Observed problems in checked-in code:
+
+- Merge conflict markers exist in:
+  - `paismart-go-main/configs/config.yaml`
+  - `paismart-go-main/internal/service/document_service.go`
+  - `paismart-go-main/internal/service/search_service.go`
+  - `paismart-go-main/internal/service/upload_service.go`
+- `paismart-go-main/cmd/server/main.go` references newer Eino / agent wiring that does not fully match other checked-in files.
+- The nested config struct and route registration code appear mid-refactor, so additional compile errors may exist even after removing conflict markers.
+
+Outer-root backend build is already known-bad because the outer root is missing `internal/` and `pkg/`.
+
+## Configuration Reality
+
+Outer-root `configs/config.yaml` is an older, simpler snapshot.
+
+Nested `paismart-go-main/configs/config.yaml` is the backend config under active change and includes newer sections for:
+
+- Kafka chat-history topic
+- Eino-related settings
+- RabbitMQ
+- document splitter settings
+
+However, that nested config file currently contains unresolved conflict markers.
+
+## Testing Reality
+
+- There are currently no `*_test.go` files in the repository.
+- Do not claim the project has automated backend test coverage.
+
+## Guidance For Claude Code
+
+- First determine whether the task targets the outer snapshot or the nested source-of-truth app.
+- For backend work, default to `paismart-go-main/`.
+- For homepage work, default to `paismart-go-main/homepage/`.
+- For frontend work, default to repo-root `frontend/` unless the task explicitly targets the duplicated nested copy.
+- Before saying the backend is runnable, verify from `paismart-go-main/`.
+- Before editing config or service files in the nested backend, check for conflict markers with:
+
+```bash
+rg -n "^(<<<<<<<|=======|>>>>>>>)" paismart-go-main
 ```
-frontend/
-├── src/
-│   ├── assets/                 # Static assets
-│   ├── components/             # Vue components
-│   ├── layouts/                # Page layouts
-│   ├── router/                 # Vue Router configuration
-│   ├── service/                # API integration
-│   ├── store/                  # Pinia state management
-│   └── views/                  # Page components
-└── packages/                   # Monorepo workspace packages
-```
 
-## Architecture Patterns
+- When documenting architecture, mention both:
+  - Kafka document processing
+  - RabbitMQ + Eino helper/history/agent modules
 
-### Dependency Injection & Initialization Flow
+The older `AGENTS.md` and previous `CLAUDE.md` describe an earlier, cleaner layout and are no longer accurate enough to use as-is.
 
-The application follows a layered dependency injection pattern initialized in `cmd/server/main.go`:
+## Prohibited Git Operations
+- DO NOT run git commit
+- DO NOT run git push  
+- DO NOT run git add
+- Read-only git commands are allowed: git status / git diff / git log
 
-1. **Config** → Load from `configs/config.yaml`
-2. **Infrastructure** → Initialize MySQL, Redis, MinIO, Elasticsearch, Kafka
-3. **Repositories** → Create data access layer instances
-4. **Services** → Inject repositories and clients
-5. **Handlers** → Inject services
-6. **Routes** → Register handlers with Gin router
-7. **Background Workers** → Start Kafka consumer for async processing
+## Scope of Work
 
-### RAG Implementation Flow
+- Only modify code as explicitly instructed — do not add unrequested features
+- Do NOT run the backend server or any long-running process
+- Do NOT run tests or test commands (go test, pnpm test, etc.)
+- Do NOT run build commands unless explicitly asked
+- Allowed read operations: read files, search code, understand structure
+- Allowed write operations: edit files per instruction only
 
-**Document Upload & Processing:**
-1. Client uploads file chunks → `UploadHandler`
-2. Chunks stored in MinIO, metadata in MySQL
-3. After merge, Kafka message published to `file-processing` topic
-4. `Processor` consumes message:
-   - Downloads file from MinIO
-   - Extracts text via Tika
-   - Splits text into chunks (500 chars, 50 overlap)
-   - Saves chunks to MySQL (`document_vector` table)
-   - Generates embeddings via DashScope
-   - Indexes to Elasticsearch with vectors
+## Before Making Any Change
 
-**Query & Chat:**
-1. User sends query via WebSocket → `ChatHandler`
-2. `SearchService` performs hybrid search:
-   - Semantic search (vector similarity in ES)
-   - Keyword search (BM25 in ES)
-   - Respects user permissions (public/org/private)
-3. Top results fed as context to LLM
-4. LLM generates response, streamed back via WebSocket
-
-### Multi-Tenancy & Authorization
-
-**Three-tier access control:**
-- **Public documents:** Accessible to all authenticated users
-- **Organization documents:** Accessible to users in the same `orgTag`
-- **Private documents:** Accessible only to owner (by `userId`)
-
-**Middleware chain:**
-- `AuthMiddleware`: Validates JWT, extracts `userId` and `role`
-- `AdminAuthMiddleware`: Enforces `role == "admin"` for admin routes
-
-### Async Processing with Kafka
-
-The system uses Kafka to decouple file upload from heavy processing:
-
-- **Producer:** `uploadService.MergeChunks()` publishes `FileProcessingTask` to Kafka
-- **Consumer:** Background goroutine in `main.go` runs `kafka.StartConsumer()`
-- **Processor:** `pipeline.Processor` handles document processing pipeline
-
-This ensures:
-- Fast upload response times
-- Graceful handling of processing failures
-- Horizontal scalability (multiple consumers)
-
-## Configuration
-
-**Config file:** `configs/config.yaml`
-
-**Critical settings:**
-- `server.port`: HTTP server port (default: 8081)
-- `server.mode`: Gin mode (debug, release, test)
-- `database.mysql.dsn`: MySQL connection string
-- `database.redis.addr/password`: Redis connection
-- `kafka.brokers/topic`: Kafka settings
-- `elasticsearch.addresses/index_name`: ES cluster
-- `minio.*`: Object storage credentials
-- `embedding.*`: Embedding model API (DashScope)
-- `llm.*`: LLM API (DeepSeek/Ollama)
-
-**Important:** Never commit real API keys or passwords to the repository. Use environment variables or secure secret management in production.
-
-## Key Implementation Details
-
-### Chinese Text Processing
-
-The system uses `gojieba` for Chinese word segmentation and Elasticsearch with the `analysis-ik` plugin for Chinese text search. Text chunking respects Unicode rune boundaries to avoid splitting multi-byte characters.
-
-### File Upload with Chunking
-
-Supports large file uploads via:
-1. **Check:** Client sends MD5 → server checks if file exists (instant upload)
-2. **Chunk:** Upload file in chunks (configurable size)
-3. **Merge:** Server merges chunks in MinIO, triggers processing
-
-### WebSocket Authentication
-
-WebSocket connections use a two-step auth:
-1. Client requests temporary token via `/api/v1/chat/websocket-token` (authenticated)
-2. Client connects to `/chat/:token` with the token in URL
-3. Token validated and exchanged for user session
-
-### Graceful Shutdown
-
-The server implements graceful shutdown:
-- Catches `SIGINT`/`SIGTERM` signals
-- 5-second timeout for existing requests
-- Proper cleanup of resources
-
-## Frontend Development Notes
-
-The frontend is a Vue 3 + TypeScript application using:
-- **Naive UI** for components
-- **Pinia** for state management
-- **UnoCSS** for styling
-- **Vite** for building
-- **pnpm** workspace for monorepo structure
-
-Frontend connects to backend via:
-- REST API for data operations
-- WebSocket for real-time chat
-
-API base URL configured in `.env` files (`.env`, `.env.test`, `.env.prod`).
-
-## Testing
-
-Currently, the project does not have extensive test coverage. When adding tests:
-
-- Use Go's built-in testing framework (`*_test.go` files)
-- Mock external dependencies (Kafka, Elasticsearch, LLM APIs)
-- Focus on business logic in `service/` layer
-- Use table-driven tests for multiple scenarios
-
-## Common Gotchas
-
-1. **Elasticsearch index mapping:** The index must be created with proper vector field mapping before first use. Check `pkg/es/client.go` for index creation logic.
-
-2. **Kafka consumer blocking:** The Kafka consumer runs in a background goroutine. Ensure proper context cancellation for graceful shutdown if implementing custom shutdown logic.
-
-3. **MinIO bucket creation:** The bucket must exist before file upload. Docker Compose includes `minio-init` service to create it automatically.
-
-4. **JWT secret:** Use a strong random secret in production. The example in `configs/config.yaml` is for development only.
-
-5. **Embedding dimensions:** The `embedding.dimensions` config must match the model being used (default: 2048 for text-embedding-v4).
-
-6. **Chinese text handling:** Always use `[]rune` instead of byte slicing when working with Chinese text to avoid breaking multi-byte characters.
-
-## Related Resources
-
-- Original Java/Spring Boot version: See main README.md for architecture comparison
-- Tutorial: https://paicoding.com/column/10/1 (Chinese, requires membership)
-- DeepSeek API: https://api.deepseek.com
-- Alibaba DashScope: https://dashscope.aliyuncs.com
+- State which file(s) you plan to modify and why
+- Wait for confirmation before editing

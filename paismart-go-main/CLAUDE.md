@@ -1,291 +1,181 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working inside `paismart-go-main/`.
 
-## Project Overview
+## Scope
 
-PaiSmart (派聪明) is an enterprise-level AI knowledge base management system using RAG (Retrieval Augmented Generation) technology. This is the **Go backend implementation** of the system, which also includes a Vue 3 frontend and a homepage.
+This directory is the **actual backend application root** inside the outer repository.
 
-**Core Architecture:**
-- Backend: Go (this repository)
-- Frontend: Vue 3 + TypeScript (in `frontend/` directory)
-- Homepage: Static site (in `homepage/` directory)
+If you are working here, use this directory as the base for:
 
-**Technology Stack:**
-- **Framework:** Gin (HTTP), WebSocket (real-time communication)
-- **Databases:** MySQL (metadata), Redis (caching), Elasticsearch 8.10.0 (vector search)
-- **Message Queue:** Kafka (async document processing)
-- **Object Storage:** MinIO (file storage)
-- **Document Processing:** Apache Tika (text extraction)
-- **AI Services:** DeepSeek/Ollama (LLM), Alibaba DashScope (embeddings)
-- **Security:** JWT authentication, role-based authorization
+- backend code
+- backend config
+- backend infrastructure files
+- the full homepage app
+- the duplicated frontend app
 
-## Common Commands
+## Actual Structure
 
-### Backend (Go)
-
-```bash
-# Build the application
-go build -o bin/server cmd/server/main.go
-
-# Run the server directly
-go run cmd/server/main.go
-
-# Run tests (if tests exist)
-go test ./...
-
-# Run tests for a specific package
-go test ./internal/service/...
-
-# Update dependencies
-go mod tidy
-go mod download
-
-# Format code
-go fmt ./...
-
-# Lint (requires golangci-lint)
-golangci-lint run
+```text
+.
+├── cmd/server/main.go
+├── configs/config.yaml
+├── deployments/docker-compose.yaml
+├── docs/ddl.sql
+├── frontend/
+├── homepage/
+├── initfile/
+├── internal/
+│   ├── ai/
+│   ├── app/bootstrap/
+│   ├── config/
+│   ├── eino/
+│   ├── handler/
+│   ├── infra/
+│   ├── middleware/
+│   ├── model/
+│   ├── pipeline/
+│   ├── repository/
+│   ├── router/
+│   ├── seed/
+│   └── service/
+└── pkg/
+    ├── code/
+    ├── database/
+    ├── embedding/
+    ├── es/
+    ├── hash/
+    ├── kafka/
+    ├── log/
+    ├── storage/
+    ├── tasks/
+    ├── tika/
+    └── token/
 ```
 
-### Frontend (Vue 3)
+## Architecture Reality
+
+Older docs that describe a simple Gin + Kafka + RAG backend are incomplete.
+
+Current checked-in code includes:
+
+- classic `handler -> service -> repository` layering
+- Kafka-based document ingestion
+- `internal/eino/` for newer AI/chat/document/tool integration
+- `internal/ai/helper/` and `internal/ai/history/` for helper/session/history management
+- RabbitMQ code in `internal/infra/mq/rabbitmq/` for async history persistence
+- centralized route registration in `internal/router/router.go`
+- `internal/handler/agent_handler.go` for `/api/v1/agent/chat`
+- seed import logic in `internal/seed/seed.go`
+
+When describing the system, mention both:
+
+- Kafka document processing
+- RabbitMQ + Eino helper/history/agent flow
+
+## Commands
+
+### Backend
+
+```bash
+go mod tidy
+go build ./cmd/server
+go run cmd/server/main.go
+```
+
+### Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 pnpm install
-
-# Development server (test mode)
 pnpm run dev
-
-# Development server (prod mode)
 pnpm run dev:prod
-
-# Build for production
 pnpm run build
-
-# Build for test environment
 pnpm run build:test
-
-# Type checking
 pnpm run typecheck
-
-# Lint and fix
 pnpm run lint
-
-# Preview production build
-pnpm run preview
 ```
 
-### Docker & Infrastructure
+### Homepage
 
 ```bash
-# Start all services (MySQL, Redis, Kafka, Elasticsearch, MinIO, Tika)
-cd deployments
-docker-compose up -d
-
-# Stop all services
-docker-compose down
-
-# View logs
-docker-compose logs -f [service_name]
-
-# Rebuild and restart a specific service
-docker-compose up -d --build [service_name]
+cd homepage
+pnpm install
+pnpm run dev
+pnpm run build
 ```
 
-## Project Structure
+### Infrastructure
 
-### Backend Structure (Go)
-
-```
-pai-smart-go/
-├── cmd/server/main.go          # Application entry point, dependency injection
-├── configs/config.yaml         # Configuration file (NOT committed with secrets)
-├── internal/                   # Internal application code
-│   ├── config/                 # Config loading (Viper)
-│   ├── handler/                # HTTP/WebSocket handlers (Gin controllers)
-│   ├── middleware/             # Auth, logging, admin authorization
-│   ├── model/                  # Domain models and database entities
-│   ├── pipeline/               # Document processing pipeline (Tika → chunking → embedding → ES)
-│   ├── repository/             # Data access layer (GORM, Redis)
-│   └── service/                # Business logic layer
-├── pkg/                        # Reusable packages
-│   ├── database/               # MySQL, Redis initialization
-│   ├── embedding/              # Embedding client (DashScope)
-│   ├── es/                     # Elasticsearch client
-│   ├── hash/                   # Password hashing (bcrypt)
-│   ├── kafka/                  # Kafka producer/consumer
-│   ├── llm/                    # LLM client (DeepSeek/Ollama)
-│   ├── log/                    # Zap logger
-│   ├── storage/                # MinIO client
-│   ├── tika/                   # Tika document extraction
-│   └── token/                  # JWT token management
-└── docs/ddl.sql                # Database schema
+```bash
+docker compose -f deployments/docker-compose.yaml up -d
+docker compose -f deployments/docker-compose.yaml down
 ```
 
-### Frontend Structure (Vue 3)
+## Current Breakage
 
+Do not assume this backend currently builds.
+
+Observed issues:
+
+- unresolved conflict markers in:
+  - `configs/config.yaml`
+  - `internal/service/document_service.go`
+  - `internal/service/search_service.go`
+  - `internal/service/upload_service.go`
+- `cmd/server/main.go` references newer wiring that does not fully match the checked-in config and route definitions
+- additional compile errors may exist after conflict cleanup because the Eino / agent refactor is not fully aligned yet
+
+Before saying the backend is runnable, verify it again locally.
+
+## Configuration Notes
+
+This subtree's `configs/config.yaml` is the relevant backend config file.
+
+It includes or attempts to include settings for:
+
+- Kafka
+- Eino
+- RabbitMQ
+- document splitting
+
+However, the file currently has merge conflict markers and should be treated as mid-refactor.
+
+## Testing Reality
+
+- There are no `*_test.go` files in this subtree.
+- Do not claim there is automated backend test coverage.
+
+## Guidance For Claude Code
+
+- Start backend work here, not from the outer repo root.
+- Check for conflict markers before editing service or config files:
+
+```bash
+rg -n "^(<<<<<<<|=======|>>>>>>>)" .
 ```
-frontend/
-├── src/
-│   ├── assets/                 # Static assets
-│   ├── components/             # Vue components
-│   ├── layouts/                # Page layouts
-│   ├── router/                 # Vue Router configuration
-│   ├── service/                # API integration
-│   ├── store/                  # Pinia state management
-│   └── views/                  # Page components
-└── packages/                   # Monorepo workspace packages
-```
 
-## Architecture Patterns
+- If a task involves homepage work, use `homepage/`.
+- If a task involves duplicated frontend code, confirm whether the outer repo `frontend/` or this local `frontend/` is the intended target.
+- If you need repo-wide layout context, also read the outer `../CLAUDE.md`.
 
-### Dependency Injection & Initialization Flow
 
-The application follows a layered dependency injection pattern initialized in `cmd/server/main.go`:
+## Prohibited Git Operations
+- DO NOT run git commit
+- DO NOT run git push  
+- DO NOT run git add
+- Read-only git commands are allowed: git status / git diff / git log
 
-1. **Config** → Load from `configs/config.yaml`
-2. **Infrastructure** → Initialize MySQL, Redis, MinIO, Elasticsearch, Kafka
-3. **Repositories** → Create data access layer instances
-4. **Services** → Inject repositories and clients
-5. **Handlers** → Inject services
-6. **Routes** → Register handlers with Gin router
-7. **Background Workers** → Start Kafka consumer for async processing
+## Scope of Work
 
-### RAG Implementation Flow
+- Only modify code as explicitly instructed — do not add unrequested features
+- Do NOT run the backend server or any long-running process
+- Do NOT run tests or test commands (go test, pnpm test, etc.)
+- Do NOT run build commands unless explicitly asked
+- Allowed read operations: read files, search code, understand structure
+- Allowed write operations: edit files per instruction only
 
-**Document Upload & Processing:**
-1. Client uploads file chunks → `UploadHandler`
-2. Chunks stored in MinIO, metadata in MySQL
-3. After merge, Kafka message published to `file-processing` topic
-4. `Processor` consumes message:
-   - Downloads file from MinIO
-   - Extracts text via Tika
-   - Splits text into chunks (500 chars, 50 overlap)
-   - Saves chunks to MySQL (`document_vector` table)
-   - Generates embeddings via DashScope
-   - Indexes to Elasticsearch with vectors
+## Before Making Any Change
 
-**Query & Chat:**
-1. User sends query via WebSocket → `ChatHandler`
-2. `SearchService` performs hybrid search:
-   - Semantic search (vector similarity in ES)
-   - Keyword search (BM25 in ES)
-   - Respects user permissions (public/org/private)
-3. Top results fed as context to LLM
-4. LLM generates response, streamed back via WebSocket
-
-### Multi-Tenancy & Authorization
-
-**Three-tier access control:**
-- **Public documents:** Accessible to all authenticated users
-- **Organization documents:** Accessible to users in the same `orgTag`
-- **Private documents:** Accessible only to owner (by `userId`)
-
-**Middleware chain:**
-- `AuthMiddleware`: Validates JWT, extracts `userId` and `role`
-- `AdminAuthMiddleware`: Enforces `role == "admin"` for admin routes
-
-### Async Processing with Kafka
-
-The system uses Kafka to decouple file upload from heavy processing:
-
-- **Producer:** `uploadService.MergeChunks()` publishes `FileProcessingTask` to Kafka
-- **Consumer:** Background goroutine in `main.go` runs `kafka.StartConsumer()`
-- **Processor:** `pipeline.Processor` handles document processing pipeline
-
-This ensures:
-- Fast upload response times
-- Graceful handling of processing failures
-- Horizontal scalability (multiple consumers)
-
-## Configuration
-
-**Config file:** `configs/config.yaml`
-
-**Critical settings:**
-- `server.port`: HTTP server port (default: 8081)
-- `server.mode`: Gin mode (debug, release, test)
-- `database.mysql.dsn`: MySQL connection string
-- `database.redis.addr/password`: Redis connection
-- `kafka.brokers/topic`: Kafka settings
-- `elasticsearch.addresses/index_name`: ES cluster
-- `minio.*`: Object storage credentials
-- `embedding.*`: Embedding model API (DashScope)
-- `llm.*`: LLM API (DeepSeek/Ollama)
-
-**Important:** Never commit real API keys or passwords to the repository. Use environment variables or secure secret management in production.
-
-## Key Implementation Details
-
-### Chinese Text Processing
-
-The system uses `gojieba` for Chinese word segmentation and Elasticsearch with the `analysis-ik` plugin for Chinese text search. Text chunking respects Unicode rune boundaries to avoid splitting multi-byte characters.
-
-### File Upload with Chunking
-
-Supports large file uploads via:
-1. **Check:** Client sends MD5 → server checks if file exists (instant upload)
-2. **Chunk:** Upload file in chunks (configurable size)
-3. **Merge:** Server merges chunks in MinIO, triggers processing
-
-### WebSocket Authentication
-
-WebSocket connections use a two-step auth:
-1. Client requests temporary token via `/api/v1/chat/websocket-token` (authenticated)
-2. Client connects to `/chat/:token` with the token in URL
-3. Token validated and exchanged for user session
-
-### Graceful Shutdown
-
-The server implements graceful shutdown:
-- Catches `SIGINT`/`SIGTERM` signals
-- 5-second timeout for existing requests
-- Proper cleanup of resources
-
-## Frontend Development Notes
-
-The frontend is a Vue 3 + TypeScript application using:
-- **Naive UI** for components
-- **Pinia** for state management
-- **UnoCSS** for styling
-- **Vite** for building
-- **pnpm** workspace for monorepo structure
-
-Frontend connects to backend via:
-- REST API for data operations
-- WebSocket for real-time chat
-
-API base URL configured in `.env` files (`.env`, `.env.test`, `.env.prod`).
-
-## Testing
-
-Currently, the project does not have extensive test coverage. When adding tests:
-
-- Use Go's built-in testing framework (`*_test.go` files)
-- Mock external dependencies (Kafka, Elasticsearch, LLM APIs)
-- Focus on business logic in `service/` layer
-- Use table-driven tests for multiple scenarios
-
-## Common Gotchas
-
-1. **Elasticsearch index mapping:** The index must be created with proper vector field mapping before first use. Check `pkg/es/client.go` for index creation logic.
-
-2. **Kafka consumer blocking:** The Kafka consumer runs in a background goroutine. Ensure proper context cancellation for graceful shutdown if implementing custom shutdown logic.
-
-3. **MinIO bucket creation:** The bucket must exist before file upload. Docker Compose includes `minio-init` service to create it automatically.
-
-4. **JWT secret:** Use a strong random secret in production. The example in `configs/config.yaml` is for development only.
-
-5. **Embedding dimensions:** The `embedding.dimensions` config must match the model being used (default: 2048 for text-embedding-v4).
-
-6. **Chinese text handling:** Always use `[]rune` instead of byte slicing when working with Chinese text to avoid breaking multi-byte characters.
-
-## Related Resources
-
-- Original Java/Spring Boot version: See main README.md for architecture comparison
-- Tutorial: https://paicoding.com/column/10/1 (Chinese, requires membership)
-- DeepSeek API: https://api.deepseek.com
-- Alibaba DashScope: https://dashscope.aliyuncs.com
+- State which file(s) you plan to modify and why
+- Wait for confirmation before editing
