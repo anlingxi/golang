@@ -11,6 +11,7 @@ type FileProcessingTask struct {
 	IsPublic  bool   `json:"is_public"`
 	Bucket    string `json:"bucket"`
 	ObjectKey string `json:"object_key"`
+	MimeType  string `json:"mime_type"`
 }
 
 // Package tasks defines the structure for tasks that are sent to Kafka.

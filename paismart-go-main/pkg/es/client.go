@@ -48,7 +48,7 @@ func createIndexIfNotExists(indexName string) error {
 	// 如果 res.StatusCode 是 200，说明索引已存在
 	if !res.IsError() && res.StatusCode == http.StatusOK {
 		log.Infof("索引 '%s' 已存在", indexName)
-		return nil
+		return ensureExtendedMapping(indexName)
 	}
 	// 如果 res.StatusCode 是 404，说明索引不存在，需要创建
 	if res.StatusCode != http.StatusNotFound {
@@ -69,6 +69,20 @@ func createIndexIfNotExists(indexName string) error {
 					"analyzer": "ik_max_word",
 					"search_analyzer": "ik_smart" 
 				},
+				"text_content_zh": {
+					"type": "text",
+					"analyzer": "ik_max_word",
+					"search_analyzer": "ik_smart"
+				},
+				"text_content_en": {
+					"type": "text",
+					"analyzer": "english"
+				},
+				"text_content_code": {
+					"type": "text",
+					"analyzer": "whitespace"
+				},
+				"lang": { "type": "keyword" },
 				"vector": {
 					"type": "dense_vector",
 					"dims": 2048,
@@ -98,6 +112,44 @@ func createIndexIfNotExists(indexName string) error {
 	}
 
 	log.Infof("索引 '%s' 创建成功", indexName)
+	return nil
+}
+
+func ensureExtendedMapping(indexName string) error {
+	mapping := `{
+		"properties": {
+			"text_content_zh": {
+				"type": "text",
+				"analyzer": "ik_max_word",
+				"search_analyzer": "ik_smart"
+			},
+			"text_content_en": {
+				"type": "text",
+				"analyzer": "english"
+			},
+			"text_content_code": {
+				"type": "text",
+				"analyzer": "whitespace"
+			},
+			"lang": { "type": "keyword" }
+		}
+	}`
+
+	res, err := ESClient.Indices.PutMapping(
+		[]string{indexName},
+		strings.NewReader(mapping),
+	)
+	if err != nil {
+		log.Errorf("更新索引 '%s' mapping 失败: %v", indexName, err)
+		return err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		log.Errorf("更新索引 '%s' mapping 返回错误: %s", indexName, res.String())
+		return fmt.Errorf("更新索引 mapping 失败: %s", res.String())
+	}
+
+	log.Infof("索引 '%s' mapping 已补齐多语言字段", indexName)
 	return nil
 }
 

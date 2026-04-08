@@ -41,16 +41,21 @@ func NewDeepSeekProducts(ctx context.Context, cfg config.EinoConfig) (AIProducts
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DeepSeek chat model: %w", err)
 	}
+	deepSeekChatModel, ok := chatModel.(*einochat.DeepSeekChatModel)
+	if !ok {
+		return nil, fmt.Errorf("unexpected deepseek chat model type: %T", chatModel)
+	}
 
 	// 第一批先把接口打通。
 	// 第二批在这里接真实的 DeepSeek / OpenAI-compatible Eino embedder。
 	var embedder einoembedding.Embedder
 	if cfg.Embedding.APIKey != "" && cfg.Embedding.BaseURL != "" {
+		dims := cfg.Embedding.Dimensions
 		embedder, err = einoopenaiemb.NewEmbedder(ctx, &einoopenaiemb.EmbeddingConfig{
 			APIKey:     cfg.Embedding.APIKey,
 			BaseURL:    cfg.Embedding.BaseURL,
 			Model:      cfg.Embedding.Model,
-			Dimensions: cfg.Embedding.Dimensions,
+			Dimensions: &dims,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create eino embedder: %w", err)
@@ -58,7 +63,7 @@ func NewDeepSeekProducts(ctx context.Context, cfg config.EinoConfig) (AIProducts
 	}
 
 	return &DeepSeekProducts{
-		chatModel:        chatModel,
+		chatModel:        deepSeekChatModel,
 		messageConverter: NewDefaultMessageConverter(),
 		einoEmbedder:     embedder,
 		capabilities: ModelCapabilities{

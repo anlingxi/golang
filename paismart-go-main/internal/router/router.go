@@ -22,6 +22,7 @@ func RegisterRoutes(
 	conversationService service.ConversationService,
 	conversationRepo repository.ConversationRepository,
 	helperManager *helper.Manager,
+	agentHandler *handler.AgentHandler,
 ) {
 	// 先统一创建一次 ChatHandler，避免重复 new
 	chatHandler := handler.NewChatHandler(
@@ -97,6 +98,12 @@ func RegisterRoutes(
 		chatGroup := apiV1.Group("/chat")
 		{
 			chatGroup.GET("/websocket-token", chatHandler.GetWebsocketStopToken)
+		}
+
+		agent := apiV1.Group("/agent")
+		agent.Use(middleware.AuthMiddleware(jwtManager, userService))
+		{
+			agent.POST("/chat", agentHandler.AgentChat)
 		}
 
 		// WebSocket 主连接

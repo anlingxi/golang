@@ -149,6 +149,8 @@ type AIPromptConfig struct {
 type EinoConfig struct {
 	ChatModel EinoChatModelConfig `mapstructure:"chat_model"`
 	Callback  EinoCallbackConfig  `mapstructure:"callback"`
+	Embedding EinoEmbeddingConfig `mapstructure:"embedding"`
+	Agent     EinoAgentConfig     `mapstructure:"agent"`
 }
 
 type EinoChatModelConfig struct {
@@ -161,6 +163,65 @@ type EinoChatModelConfig struct {
 type EinoCallbackConfig struct {
 	EnableLogging bool `mapstructure:"enable_logging"`
 	EnableTrace   bool `mapstructure:"enable_trace"`
+}
+
+type EinoEmbeddingConfig struct {
+	Provider   string `mapstructure:"provider"`
+	BaseURL    string `mapstructure:"base_url"`
+	APIKey     string `mapstructure:"api_key"`
+	Model      string `mapstructure:"model"`
+	Dimensions int    `mapstructure:"dimensions"`
+}
+
+type EinoAgentConfig struct {
+	Tools EinoAgentToolsConfig `mapstructure:"tools"`
+}
+
+type EinoAgentToolsConfig struct {
+	KnowledgeSearch EinoKnowledgeSearchToolConfig `mapstructure:"knowledge_search"`
+	ListDocuments   EinoListDocumentsToolConfig   `mapstructure:"list_documents"`
+	CurrentTime     EinoCurrentTimeToolConfig     `mapstructure:"current_time"`
+	WebSearch       EinoWebSearchToolConfig       `mapstructure:"web_search"`
+	GitQuery        EinoGitQueryToolConfig        `mapstructure:"git_query"`
+}
+
+type EinoKnowledgeSearchToolConfig struct {
+	Enabled     bool `mapstructure:"enabled"`
+	DefaultTopK int  `mapstructure:"default_top_k"`
+	MaxTopK     int  `mapstructure:"max_top_k"`
+}
+
+type EinoListDocumentsToolConfig struct {
+	Enabled      bool `mapstructure:"enabled"`
+	DefaultLimit int  `mapstructure:"default_limit"`
+	MaxLimit     int  `mapstructure:"max_limit"`
+}
+
+type EinoCurrentTimeToolConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	DefaultTimezone string `mapstructure:"default_timezone"`
+}
+
+type EinoWebSearchToolConfig struct {
+	Enabled           bool   `mapstructure:"enabled"`
+	Provider          string `mapstructure:"provider"`
+	BaseURL           string `mapstructure:"base_url"`
+	APIKey            string `mapstructure:"api_key"`
+	TimeoutSeconds    int    `mapstructure:"timeout_seconds"`
+	ProxyURL          string `mapstructure:"proxy_url"`
+	DefaultMaxResults int    `mapstructure:"default_max_results"`
+	MaxMaxResults     int    `mapstructure:"max_max_results"`
+	SearchDepth       string `mapstructure:"search_depth"`
+}
+
+type EinoGitQueryToolConfig struct {
+	Enabled        bool     `mapstructure:"enabled"`
+	BaseURL        string   `mapstructure:"base_url"`
+	APIKey         string   `mapstructure:"api_key"`
+	TimeoutSeconds int      `mapstructure:"timeout_seconds"`
+	ProxyURL       string   `mapstructure:"proxy_url"`
+	MaxFileChars   int      `mapstructure:"max_file_chars"`
+	AllowRepos     []string `mapstructure:"allow_repos"`
 }
 
 type RabbitMQConfig struct {

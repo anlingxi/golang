@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	einotransformer "github.com/cloudwego/eino/components/document"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -25,8 +26,13 @@ func NewRecursiveFallbackTransformer(chunkSize, chunkOverlap int) *RecursiveFall
 	}
 }
 
-func (t *RecursiveFallbackTransformer) Transform(ctx context.Context, docs []*schema.Document) ([]*schema.Document, error) {
+func (t *RecursiveFallbackTransformer) Transform(
+	ctx context.Context,
+	docs []*schema.Document,
+	opts ...einotransformer.TransformerOption,
+) ([]*schema.Document, error) {
 	_ = ctx
+	_ = opts
 
 	var chunks []*schema.Document
 	step := t.ChunkSize - t.ChunkOverlap

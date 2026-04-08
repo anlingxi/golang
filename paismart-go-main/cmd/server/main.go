@@ -74,7 +74,7 @@ func main() {
 	adminService := service.NewAdminService(orgTagRepo, userRepository, conversationRepo)
 	uploadService := service.NewUploadService(uploadRepo, userRepository, cfg.MinIO)
 	documentService := service.NewDocumentService(uploadRepo, userRepository, orgTagRepo, cfg.MinIO, tikaClient)
-	searchService := service.NewSearchService(embeddingClient, es.ESClient, userService, uploadRepo)
+	searchService := service.NewSearchService(embeddingClient, es.ESClient, userService, uploadRepo, cfg.Elasticsearch.IndexName)
 	conversationService := service.NewConversationService(conversationRepo)
 
 	// 新聊天主链：ChatModel -> ChatService -> HistoryStore -> HelperFactory -> HelperManager

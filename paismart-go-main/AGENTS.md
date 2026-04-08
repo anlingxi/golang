@@ -179,3 +179,14 @@ rg -n "^(<<<<<<<|=======|>>>>>>>)" .
 
 - State which file(s) you plan to modify and why
 - Wait for confirmation before editing
+
+## Progress Management
+
+**Save progress** — When asked to "save progress", write the following to `progress.md`:
+- Current task goal
+- What has been completed so far
+- What files were modified and why
+- Next steps to continue
+- Any blockers or open questions
+
+**Resume progress** — When asked to "resume progress", read `progress.md` first, then confirm understanding before doing anything.

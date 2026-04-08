@@ -15,12 +15,17 @@ import (
 	documentpipeline "pai-smart-go/internal/eino/document/pipeline"
 	documenttransformer "pai-smart-go/internal/eino/document/transformer"
 	"pai-smart-go/internal/eino/factory"
+	"pai-smart-go/internal/language/langdetect"
 	"pai-smart-go/internal/repository"
 	"pai-smart-go/pkg/tika"
 )
 
 const (
 	esFieldContent      = "text_content"
+	esFieldContentZH    = "text_content_zh"
+	esFieldContentEN    = "text_content_en"
+	esFieldContentCode  = "text_content_code"
+	esFieldLang         = "lang"
 	esFieldVector       = "vector"
 	esFieldFileMD5      = "file_md5"
 	esFieldFileName     = "file_name"
@@ -77,11 +82,15 @@ func NewPipeline(
 					if meta == nil {
 						meta = map[string]any{}
 					}
+					contentType := langdetect.DetectContentType(doc.Content)
 
 					fields := map[string]es8.FieldValue{
 						esFieldContent: {
 							Value:    doc.Content,
 							EmbedKey: esFieldVector,
+						},
+						esFieldLang: {
+							Value: contentType,
 						},
 						esFieldFileMD5: {
 							Value: meta["file_md5"],
@@ -110,6 +119,20 @@ func NewPipeline(
 						esFieldSectionPath: {
 							Value: meta["section_path"],
 						},
+					}
+
+					switch contentType {
+					case langdetect.ContentTypeZH:
+						fields[esFieldContentZH] = es8.FieldValue{Value: doc.Content}
+					case langdetect.ContentTypeEN:
+						fields[esFieldContentEN] = es8.FieldValue{Value: doc.Content}
+					case langdetect.ContentTypeCode:
+						fields[esFieldContentCode] = es8.FieldValue{Value: doc.Content}
+					case langdetect.ContentTypeMixed:
+						fields[esFieldContentZH] = es8.FieldValue{Value: doc.Content}
+						fields[esFieldContentEN] = es8.FieldValue{Value: doc.Content}
+					default:
+						fields[esFieldContentEN] = es8.FieldValue{Value: doc.Content}
 					}
 
 					return fields, nil

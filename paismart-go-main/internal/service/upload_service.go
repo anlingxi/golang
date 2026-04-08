@@ -53,19 +53,9 @@ func NewUploadService(uploadRepo repository.UploadRepository, userRepo repositor
 // CheckFile 检查文件是否已上传（秒传逻辑）。
 func (s *uploadService) CheckFile(ctx context.Context, fileMD5 string, userID uint) (bool, []int, error) {
 	log.Infof("[CheckFile] 开始秒传检查，文件MD5: %s, 用户ID: %d", fileMD5, userID)
-<<<<<<< HEAD
-<<<<<<< HEAD
-
-=======
 	// 1. 查询数据库中是否存在该文件记录
 	// 2. 如果记录存在，检查状态，如果状态为已完成（1），则秒传成功；如果状态未完成，返回已上传的分片列表供前端继续上传
 	// 3. 如果记录不存在，返回需要进行普通上传的信号
->>>>>>> 36dc5c1 (first commit)
-=======
-	// 1. 查询数据库中是否存在该文件记录
-	// 2. 如果记录存在，检查状态，如果状态为已完成（1），则秒传成功；如果状态未完成，返回已上传的分片列表供前端继续上传
-	// 3. 如果记录不存在，返回需要进行普通上传的信号
->>>>>>> e84a998 (first commit)
 	record, err := s.uploadRepo.GetFileUploadRecord(fileMD5, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -104,14 +94,7 @@ func (s *uploadService) UploadChunk(ctx context.Context, fileMD5, fileName strin
 		}
 		isValid := false
 		for _, ext := range extensions {
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 			// Hassuffix检查需要加上点，例如 ".pdf"，以避免误判 "filepdf" 这种没有扩展名的文件
->>>>>>> 36dc5c1 (first commit)
-=======
-			// Hassuffix检查需要加上点，例如 ".pdf"，以避免误判 "filepdf" 这种没有扩展名的文件
->>>>>>> e84a998 (first commit)
 			if strings.HasSuffix(strings.ToLower(fileName), ext) { // ext now includes "."
 				isValid = true
 				break
@@ -283,27 +266,12 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 	objectURL, _ := storage.GetPresignedURL(s.minioCfg.BucketName, destObjectName, 60*60)
 	task := tasks.FileProcessingTask{
 		FileMD5:   fileMD5,
-<<<<<<< HEAD
-<<<<<<< HEAD
-		ObjectUrl: objectURL,
-=======
->>>>>>> 36dc5c1 (first commit)
-=======
->>>>>>> e84a998 (first commit)
 		FileName:  fileName,
 		UserID:    userID,
 		OrgTag:    record.OrgTag,
 		IsPublic:  record.IsPublic,
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 		Bucket:    s.minioCfg.BucketName,
 		ObjectKey: destObjectName,
->>>>>>> 36dc5c1 (first commit)
-=======
-		Bucket:    s.minioCfg.BucketName,
-		ObjectKey: destObjectName,
->>>>>>> e84a998 (first commit)
 	}
 	if err := kafka.ProduceFileTask(task); err != nil {
 		log.Errorf("[MergeChunks] 发送文件处理任务到Kafka失败, error: %v", err)

@@ -50,6 +50,10 @@ func NewDeepSeekChatModel(cfg config.EinoConfig) (service.ChatModel, error) {
 	}, nil
 }
 
+func (m *DeepSeekChatModel) EinoModel() fmodel.ToolCallingChatModel {
+	return m.chatModel
+}
+
 func (m *DeepSeekChatModel) Stream(
 	ctx context.Context,
 	messages []service.ChatMessage,
