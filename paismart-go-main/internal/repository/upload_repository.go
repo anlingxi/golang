@@ -87,6 +87,7 @@ func (r *uploadRepository) UpdateFileUploadStatus(recordID uint, status int) err
 // TryMarkFileProcessing 尝试将文件的处理状态从待处理或失败更新为处理中，确保同一时间只有一个处理器能成功标记并处理该文件。
 // 如何保证的？通过 SQL 的 WHERE 条件限制只有当当前状态是待处理或失败时才允许更新为处理中，并且通过 RowsAffected 判断是否成功更新了记录。
 // 如果返回 true，说明成功标记了文件为处理中；如果返回 false，说明可能已经有其他处理器标记了该文件，当前处理器应该放弃处理。
+// 这是原子操作吗？
 func (r *uploadRepository) TryMarkFileProcessing(fileMD5 string, userID uint) (bool, error) {
 	result := r.db.Model(&model.FileUpload{}).
 		Where("file_md5 = ? AND user_id = ? AND process_status IN ?", fileMD5, userID, []int{
