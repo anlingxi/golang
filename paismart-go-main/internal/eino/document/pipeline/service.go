@@ -59,6 +59,7 @@ func (s *Service) Process(ctx context.Context, req ProcessRequest) (result *Proc
 	if err != nil {
 		return nil, fmt.Errorf("mark file processing failed: %w", err)
 	}
+	// 如果没有成功获取到处理权限，说明可能已经有其他处理器在处理这个文件了，当前处理器应该放弃处理以避免重复处理同一个文件
 	if !acquired {
 		log.Infof("[DocumentPipeline] skip duplicated task file_md5=%s user_id=%d", req.FileMD5, req.UserID)
 		return &ProcessResult{
