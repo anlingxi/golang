@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"pai-smart-go/internal/config"
 	"pai-smart-go/pkg/log"
+	"time"
 )
 
 // Client defines the interface for an embedding client.
@@ -24,8 +25,10 @@ type openAICompatibleClient struct {
 // NewClient creates a new embedding client based on the provider in the config.
 func NewClient(cfg config.EmbeddingConfig) Client {
 	return &openAICompatibleClient{
-		cfg:    cfg,
-		client: &http.Client{},
+		cfg: cfg,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
 	}
 }
 

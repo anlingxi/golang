@@ -50,7 +50,6 @@ type ChatService interface {
 		history []model.ChatMessage,
 		userMessage string,
 		writer StreamWriter,
-		shouldStop func() bool,
 	) (GenerateResult, error)
 }
 
@@ -79,9 +78,6 @@ func NewChatService(
 // 1. 接收用户输入和历史消息
 // 2. 调用 SearchService 做检索，获取相关文档
 // 3. 构造模型输入的消息列表，包含系统提示、历史消息、用户新消息
-// 4. 调用 ChatModel 的 Stream 方法流式生成回答，并通过 StreamWriter 输出增量结果
-var ErrGenerationStopped = errors.New("generation stopped by user")
-
 func (s *chatService) GenerateStream(
 	ctx context.Context,
 	user *model.User,
@@ -89,7 +85,6 @@ func (s *chatService) GenerateStream(
 	history []model.ChatMessage,
 	userMessage string,
 	writer StreamWriter,
-	shouldStop func() bool,
 ) (GenerateResult, error) {
 	if s.chatModel == nil {
 		return GenerateResult{}, fmt.Errorf("chat model is nil")
@@ -116,14 +111,27 @@ func (s *chatService) GenerateStream(
 	// 调用 SearchService 做检索，获取相关文档；如果检索失败，记录日志但继续进行生成，使用无检索上下文模式
 	searchResults, err := s.searchService.HybridSearch(retrieveCtx, userMessage, 5, user)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return GenerateResult{
+				Provider:      s.einoCfg.ChatModel.Provider,
+				Model:         s.einoCfg.ChatModel.Model,
+				IsInterrupted: true,
+				StopReason:    "context_canceled",
+			}, err
+		}
 		log.Warnf("[ChatService] 检索失败，继续使用无检索上下文模式, err=%v", err)
 	}
 	// 构造模型输入的消息列表，包含系统提示、历史消息、用户新消息，以及检索到的相关文档作为上下文
 	contextText := s.buildContextText(searchResults)
 	msgs := s.buildMessages(history, contextText, userMessage)
-	// 调用 ChatModel 的 Stream 方法流式生成回答，并通过 StreamWriter 输出增量结果
-	// 在生成过程中，持续检查 shouldStop 回调，如果用户请求停止生成，则返回 ErrGenerationStopped 错误
-	// 生成完成后，返回最终答案；如果 ChatModel 返回了 finalText，则使用 finalText 作为最终答案，覆盖增量拼接的结果
+	if err := modelCtxErr(runCtx); err != nil {
+		return GenerateResult{
+			Provider:      s.einoCfg.ChatModel.Provider,
+			Model:         s.einoCfg.ChatModel.Model,
+			IsInterrupted: true,
+			StopReason:    "context_canceled",
+		}, err
+	}
 	modelCtx := runCtx
 	if s.callbackManager != nil && s.callbackManager.Enabled() {
 		modelCtx = s.callbackManager.ReuseForStage(runCtx, meta.WithStage(einocallbacks.StageChatModel))
@@ -131,9 +139,6 @@ func (s *chatService) GenerateStream(
 
 	var fullAnswer strings.Builder
 	finalText, err := s.chatModel.Stream(modelCtx, msgs, func(delta string) error {
-		if shouldStop != nil && shouldStop() {
-			return ErrGenerationStopped
-		}
 		if delta == "" {
 			return nil
 		}
@@ -144,19 +149,16 @@ func (s *chatService) GenerateStream(
 		return nil
 	})
 	if err != nil {
-		if writer != nil {
-			_ = writer.WriteError(err.Error())
-		}
 		result := GenerateResult{
 			Answer:        fullAnswer.String(),
 			Provider:      s.einoCfg.ChatModel.Provider,
 			Model:         s.einoCfg.ChatModel.Model,
-			IsInterrupted: errors.Is(err, ErrGenerationStopped),
+			IsInterrupted: errors.Is(err, context.Canceled),
 			StopReason:    "",
 		}
 
-		if errors.Is(err, ErrGenerationStopped) {
-			result.StopReason = "user_stop"
+		if errors.Is(err, context.Canceled) {
+			result.StopReason = "context_canceled"
 		}
 
 		return result, err
@@ -165,10 +167,6 @@ func (s *chatService) GenerateStream(
 	answer := fullAnswer.String()
 	if finalText != "" {
 		answer = finalText
-	}
-
-	if writer != nil {
-		_ = writer.WriteDone()
 	}
 
 	return GenerateResult{
@@ -182,6 +180,13 @@ func (s *chatService) GenerateStream(
 		TraceID:       "",
 		LatencyMS:     0,
 	}, nil
+}
+
+func modelCtxErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }
 
 // buildContextText 将检索结果格式化为字符串，作为系统提示的一部分提供给模型。

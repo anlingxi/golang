@@ -1,13 +1,15 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
+	"strings"
 	"sync"
-	"time"
 
 	"pai-smart-go/internal/ai/helper"
+	"pai-smart-go/internal/model"
 	"pai-smart-go/internal/repository"
 	"pai-smart-go/internal/service"
 	"pai-smart-go/pkg/log"
@@ -25,18 +27,121 @@ var (
 	}
 )
 
+type CancelReason string
+
+const (
+	cancelReasonNone       CancelReason = ""
+	cancelReasonStopped    CancelReason = "stopped"
+	cancelReasonSuperseded CancelReason = "superseded"
+	finishReasonCompleted               = "completed"
+	finishReasonStopped                 = "stopped"
+	finishReasonSuperseded              = "superseded"
+)
+
+type wsClientMessage struct {
+	Type           string `json:"type"`
+	RequestID      string `json:"requestId"`
+	ConversationID string `json:"conversationId"`
+	Message        string `json:"message"`
+}
+
+// activeRequest 代表一个正在处理的请求，包含请求ID、会话ID、取消函数和完成信号等信息。
+type activeRequest struct {
+	requestID      string
+	conversationID string
+	cancel         context.CancelFunc
+	done           chan struct{}
+
+	mu     sync.RWMutex
+	reason CancelReason
+}
+
+func (r *activeRequest) setReason(reason CancelReason) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reason = reason
+}
+
+func (r *activeRequest) getReason() CancelReason {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.reason
+}
+
+// 一个会话对应一个 WebSocket 连接，连接内可以有多个请求（requestId），但同一时刻只能有一个活跃请求在处理。
+type chatSession struct {
+	conn             *websocket.Conn
+	writeMu          sync.Mutex
+	stateMu          sync.Mutex
+	active           *activeRequest
+	lastConversation string
+}
+
+func (s *chatSession) writeJSON(payload any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.WriteJSON(payload)
+}
+
+func (s *chatSession) setActive(active *activeRequest) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.active = active
+	s.lastConversation = active.conversationID
+}
+
+func (s *chatSession) clearActive(active *activeRequest) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.active == active {
+		s.active = nil
+		if active.conversationID != "" {
+			s.lastConversation = active.conversationID
+		}
+	}
+}
+
+func (s *chatSession) currentActive() *activeRequest {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.active
+}
+
+func (s *chatSession) currentConversationID() string {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.active != nil && s.active.conversationID != "" {
+		return s.active.conversationID
+	}
+	return s.lastConversation
+}
+
+// 如果当前有活跃请求且 requestID 为空或与活跃请求的 requestID 匹配，则取消该请求并等待其完成。
+// 返回被取消的 activeRequest，以便调用者可以获取取消原因等信息。
+func (s *chatSession) cancelActive(reason CancelReason, requestID string) *activeRequest {
+	s.stateMu.Lock()
+	active := s.active
+	// 只有当 active 不为 nil 且 requestID 为空或与 active 的 requestID 匹配时，才执行取消操作。这确保了我们不会错误地取消一个不相关的请求。
+	if active == nil || (requestID != "" && active.requestID != requestID) {
+		s.stateMu.Unlock()
+		return nil
+	}
+	active.setReason(reason)
+	cancel := active.cancel
+	done := active.done
+	s.stateMu.Unlock()
+
+	cancel()
+	<-done
+	return active
+}
+
 // ChatHandler 负责处理 WebSocket 聊天连接。
 type ChatHandler struct {
 	helperManager    *helper.Manager
 	conversationRepo repository.ConversationRepository
 	userService      service.UserService
 	jwtManager       *token.JWTManager
-
-	stopToken     string
-	stopTokenLock sync.Mutex
-
-	// 每连接停止标志
-	stopFlags sync.Map // key: session pointer string, value: bool
 }
 
 // NewChatHandler 创建一个新的 ChatHandler。
@@ -54,25 +159,10 @@ func NewChatHandler(
 	}
 }
 
-// GetWebsocketStopToken 返回一个可用于停止流的令牌。
-func (h *ChatHandler) GetWebsocketStopToken(c *gin.Context) {
-	h.stopTokenLock.Lock()
-	defer h.stopTokenLock.Unlock()
-
-	h.stopToken = "WSS_STOP_CMD_" + token.GenerateRandomString(16)
-	c.JSON(http.StatusOK, gin.H{
-		"code":    http.StatusOK,
-		"message": "success",
-		"data": gin.H{
-			"cmdToken": h.stopToken,
-		},
-	})
-}
-
 // Handle 处理一个传入的 WebSocket 连接。
 func (h *ChatHandler) Handle(c *gin.Context) {
+	// jwt 验证
 	tokenString := c.Param("token")
-	// 验证 token，获取用户信息
 	claims, err := h.jwtManager.VerifyToken(tokenString)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -83,7 +173,6 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 根据 claims 获取用户信息
 	user, err := h.userService.GetProfile(claims.Username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -93,8 +182,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		})
 		return
 	}
-
-	// 升级 HTTP 连接到 WebSocket
+	// 升级http到websocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Error("WebSocket 升级失败", err)
@@ -102,119 +190,197 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// 创建一个独立的上下文用于管理整个连接的生命周期，连接关闭时取消该上下文，以便所有相关的请求都能及时停止
+	connCtx, cancelConn := context.WithCancel(context.Background())
+	defer cancelConn()
+
+	session := &chatSession{
+		conn: conn,
+	}
+
 	log.Infof("WebSocket 连接已建立，用户: %s", claims.Username)
 
+	// 连接建立后进入消息处理循环，直到连接关闭
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			log.Warnf("从 WebSocket 读取消息失败: %v", err)
 			break
 		}
-		log.Infof("收到 WebSocket 消息: %s", string(message))
 
-		// 1) JSON 停止指令
-		// 前端发送的停止指令格式为 JSON，包含 type 字段和 _internal_cmd_token 字段
-		var ctrl map[string]interface{}
-		if len(message) > 0 && message[0] == '{' {
-			if err := json.Unmarshal(message, &ctrl); err == nil {
-				if t, ok := ctrl["type"].(string); ok && t == "stop" {
-					if tok, ok := ctrl["_internal_cmd_token"].(string); ok {
-						h.stopTokenLock.Lock()
-						valid := (tok == h.stopToken)
-						h.stopTokenLock.Unlock()
-						if valid {
-							key := sessionKey(conn)
-							// 设置当前连接的停止标志为 true，表示应该停止流式响应。
-							h.stopFlags.Store(key, true)
-
-							resp := map[string]interface{}{
-								"type":      "stop",
-								"message":   "响应已停止",
-								"timestamp": time.Now().UnixMilli(),
-								"date":      time.Now().Format("2006-01-02T15:04:05"),
-							}
-							b, _ := json.Marshal(resp)
-							_ = conn.WriteMessage(websocket.TextMessage, b)
-							continue
-						}
-					}
-				}
+		var req wsClientMessage
+		if err := json.Unmarshal(message, &req); err != nil {
+			_ = session.writeJSON(gin.H{
+				"type":    "chat.error",
+				"code":    "invalid_payload",
+				"message": "消息格式无效",
+			})
+			continue
+		}
+		// 根据消息类型处理不同的逻辑，目前支持 ping、chat.send 和 chat.stop 三种类型
+		switch req.Type {
+		case "ping":
+			_ = session.writeJSON(gin.H{"type": "pong"})
+		case "chat.stop":
+			active := session.cancelActive(cancelReasonStopped, strings.TrimSpace(req.RequestID))
+			if active == nil {
+				_ = session.writeJSON(gin.H{
+					"type":      "chat.error",
+					"requestId": strings.TrimSpace(req.RequestID),
+					"code":      "request_not_found",
+					"message":   "没有可停止的请求",
+				})
 			}
-		}
+		case "chat.send":
+			req.Message = strings.TrimSpace(req.Message)
+			req.RequestID = strings.TrimSpace(req.RequestID)
+			req.ConversationID = strings.TrimSpace(req.ConversationID)
 
-		// 2) 旧停止令牌兼容
-		h.stopTokenLock.Lock()
-		stopTokenValue := h.stopToken
-		h.stopTokenLock.Unlock()
+			if req.RequestID == "" {
+				_ = session.writeJSON(gin.H{
+					"type":    "chat.error",
+					"code":    "missing_request_id",
+					"message": "requestId 不能为空",
+				})
+				continue
+			}
+			if req.Message == "" {
+				_ = session.writeJSON(gin.H{
+					"type":      "chat.error",
+					"requestId": req.RequestID,
+					"code":      "empty_message",
+					"message":   "消息不能为空",
+				})
+				continue
+			}
+			// 解析会话ID的优先级：请求中的 conversationId > 当前活跃请求的 conversationId > session 记录的最后一个 conversationId > 新建一个 conversationId
+			fallbackConversation := session.currentConversationID()
+			if session.currentActive() != nil {
+				session.cancelActive(cancelReasonSuperseded, "")
+			}
 
-		if string(message) == stopTokenValue {
-			log.Info("收到停止指令，正在中断流式响应...")
-			key := sessionKey(conn)
-			h.stopFlags.Store(key, true)
-			continue
-		}
+			conversationID, err := h.resolveConversationID(connCtx, user.ID, req.ConversationID, fallbackConversation)
+			if err != nil {
+				_ = session.writeJSON(gin.H{
+					"type":      "chat.error",
+					"requestId": req.RequestID,
+					"code":      "conversation_init_failed",
+					"message":   "会话初始化失败，请稍后重试",
+				})
+				continue
+			}
 
-		// 3) 获取或创建会话 ID
-		conversationID, err := h.conversationRepo.GetOrCreateConversationID(c.Request.Context(), user.ID)
-		if err != nil {
-			log.Errorf("获取或创建会话 ID 失败: %v", err)
-			writer := NewWebSocketStreamWriter(conn)
-			_ = writer.WriteError("会话初始化失败，请稍后重试")
-			_ = writer.WriteDone()
-			continue
-		}
+			active := &activeRequest{
+				requestID:      req.RequestID,
+				conversationID: conversationID,
+				done:           make(chan struct{}),
+			}
 
-		// 4) 获取或创建 AIHelper
-		aiHelper, err := h.helperManager.GetOrCreate(user.ID, conversationID)
-		if err != nil {
-			log.Errorf("获取或创建 AIHelper 失败: %v", err)
-			writer := NewWebSocketStreamWriter(conn)
-			_ = writer.WriteError("会话运行时初始化失败，请稍后重试")
-			_ = writer.WriteDone()
-			continue
-		}
+			// 这个取消和循环外面的区别 在于，这个取消是针对具体的请求的，而循环外面的取消是针对整个连接的。当一个新的请求到来时，我们取消当前活跃的请求（如果有的话），并启动一个新的请求处理流程。
+			reqCtx, reqCancel := context.WithCancel(connCtx)
+			active.cancel = reqCancel
+			session.setActive(active)
 
-		// 5) 构造流式 writer
-		writer := NewWebSocketStreamWriter(conn)
-		// 构造 shouldStop 函数，检查当前连接的停止标志
-		// 防止并发问题，应该在访问 stopFlags 时使用 sync.Map 的原子操作，避免锁竞争和死锁风险。
-		// 回调函数在aihelper调用的时候，是如何知道conn和h的，命名已经不是这个函数中的了？回调函数是一个闭包，它捕获了外部函数中的变量，
-		// 包括 conn 和 h。当我们在 aiHelper.StreamResponse 中传入 shouldStop 函数时，这个函数已经包含了对 conn 和 h 的引用，
-		// 因此在 shouldStop 内部我们可以直接访问 conn 和 h 来检查停止标志。
-		shouldStop := func() bool {
-			key := sessionKey(conn)
-			v, ok := h.stopFlags.Load(key)
-			// 返回当前连接的停止标志，如果存在且为 true，就返回 true，表示应该停止流式响应。
-			// 这里的return后代码，当前代码还会完成本次流式生成吗？会的，因为 shouldStop 只是一个检查函数，
-			// 真正的流式生成逻辑是在 AIHelper.StreamResponse 中实现的，只要 shouldStop 返回 false，生成逻辑就会继续执行。
-			// 一旦 shouldStop 返回 true，AIHelper.StreamResponse 就会停止生成新的内容，并结束流式响应。
-			return ok && v.(bool)
-		}
-
-		// 清除旧停止标志
-		// 怎么清理的？在 shouldStop 函数中，我们检查当前连接的停止标志，如果存在且为 true，就返回 true，表示应该停止流式响应。
-		// 当我们收到新的消息时，我们会清除旧的停止标志，确保新的消息能够正常处理，而不会被旧的停止指令误伤。
-		// 难道不应该在 shouldStop 函数中清除吗？不应该，因为 shouldStop 函数只是检查停止标志，而不是修改它。
-		// 我们需要在收到新消息时清除旧的停止标志，确保新的消息能够正常处理。
-		h.stopFlags.Delete(sessionKey(conn))
-
-		// 6) 调用 AIHelper，正式进入新主链
-		err = aiHelper.StreamResponse(
-			c.Request.Context(),
-			user,
-			string(message),
-			writer,
-			shouldStop,
-		)
-		if err != nil {
-			log.Errorf("处理流式响应失败: %v", err)
-			_ = writer.WriteError("AI服务暂时不可用，请稍后重试")
-			_ = writer.WriteDone()
-			break
+			go h.runGeneration(reqCtx, session, active, user, req.Message)
+		default:
+			_ = session.writeJSON(gin.H{
+				"type":      "chat.error",
+				"requestId": strings.TrimSpace(req.RequestID),
+				"code":      "unsupported_message_type",
+				"message":   "不支持的消息类型",
+			})
 		}
 	}
+
+	cancelConn()
+	session.cancelActive(cancelReasonStopped, "")
 }
 
-func sessionKey(conn *websocket.Conn) string {
-	return fmt.Sprintf("%p", conn)
+func (h *ChatHandler) resolveConversationID(
+	ctx context.Context,
+	userID uint,
+	requestConversationID string,
+	fallbackConversationID string,
+) (string, error) {
+	if requestConversationID != "" {
+		return requestConversationID, nil
+	}
+	if fallbackConversationID != "" {
+		return fallbackConversationID, nil
+	}
+	return h.conversationRepo.GetOrCreateConversationID(ctx, userID)
+}
+
+func (h *ChatHandler) runGeneration(
+	ctx context.Context,
+	session *chatSession,
+	active *activeRequest,
+	user *model.User,
+	message string,
+) {
+	defer func() {
+		session.clearActive(active)
+		close(active.done)
+	}()
+
+	if err := session.writeJSON(gin.H{
+		"type":           "chat.accepted",
+		"requestId":      active.requestID,
+		"conversationId": active.conversationID,
+	}); err != nil {
+		log.Warnf("发送 accepted 消息失败: %v", err)
+		active.setReason(cancelReasonStopped)
+		active.cancel()
+		return
+	}
+
+	aiHelper, err := h.helperManager.GetOrCreate(user.ID, active.conversationID)
+	if err != nil {
+		_ = session.writeJSON(gin.H{
+			"type":      "chat.error",
+			"requestId": active.requestID,
+			"code":      "runtime_init_failed",
+			"message":   "会话运行时初始化失败，请稍后重试",
+		})
+		return
+	}
+
+	writer := NewWebSocketStreamWriter(session, active.requestID)
+	err = aiHelper.StreamResponse(ctx, user, message, writer)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			_ = session.writeJSON(gin.H{
+				"type":         "chat.completed",
+				"requestId":    active.requestID,
+				"finishReason": finishReasonFromCancelReason(active.getReason()),
+			})
+			return
+		}
+
+		log.Errorf("处理流式响应失败: %v", err)
+		_ = session.writeJSON(gin.H{
+			"type":      "chat.error",
+			"requestId": active.requestID,
+			"code":      "ai_unavailable",
+			"message":   "AI服务暂时不可用，请稍后重试",
+		})
+		return
+	}
+
+	_ = session.writeJSON(gin.H{
+		"type":         "chat.completed",
+		"requestId":    active.requestID,
+		"finishReason": finishReasonCompleted,
+	})
+}
+
+func finishReasonFromCancelReason(reason CancelReason) string {
+	switch reason {
+	case cancelReasonSuperseded:
+		return finishReasonSuperseded
+	case cancelReasonStopped:
+		return finishReasonStopped
+	default:
+		return finishReasonStopped
+	}
 }

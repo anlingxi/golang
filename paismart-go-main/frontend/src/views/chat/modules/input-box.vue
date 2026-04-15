@@ -1,57 +1,115 @@
 <script setup lang="ts">
 const chatStore = useChatStore();
-const { input, list, wsStatus, wsData } = storeToRefs(chatStore);
-
-const latestMessage = computed(() => {
-  return list.value[list.value.length - 1] ?? {};
-});
+const { conversationId, currentRequestId, input, list, wsStatus, wsData } = storeToRefs(chatStore);
 
 const isSending = computed(() => {
-  return (
-    latestMessage.value?.role === 'assistant' && ['loading', 'pending'].includes(latestMessage.value?.status || '')
-  );
+  return Boolean(currentRequestId.value);
 });
 
-const sendable = computed(
-  () => (!input.value.message && !isSending) || ['CLOSED', 'CONNECTING'].includes(wsStatus.value)
-);
+const hasDraft = computed(() => Boolean(input.value.message.trim()));
+
+const sendable = computed(() => (!hasDraft.value && !isSending.value) || ['CLOSED', 'CONNECTING'].includes(wsStatus.value));
+
+const actionIcon = computed(() => {
+  return isSending.value && !hasDraft.value ? 'stop' : 'send';
+});
+
+function getMessageByRequestId(requestId?: string) {
+  if (!requestId) return null;
+
+  for (let i = list.value.length - 1; i >= 0; i -= 1) {
+    const item = list.value[i];
+    if (item.role === 'assistant' && item.requestId === requestId) {
+      return item;
+    }
+  }
+
+  return null;
+}
 
 watch(wsData, val => {
-  const data = JSON.parse(val);
-  const assistant = list.value[list.value.length - 1];
+  if (!val) return;
 
-  if (data.type === 'completion' && data.status === 'finished' && assistant.status !== 'error')
-    assistant.status = 'finished';
-  if (data.error) assistant.status = 'error';
-  else if (data.chunk) {
-    assistant.status = 'loading';
-    assistant.content += data.chunk;
-  }
-});
+  const data = JSON.parse(val) as Api.Chat.WsServerMessage;
 
-const handleSend = async () => {
-  //  判断是否正在发送, 如果发送中，则停止ai继续响应
-  if (isSending.value) {
-    const { error, data } = await request<Api.Chat.Token>({ url: 'chat/websocket-token', baseURL: 'proxy-api' });
-    if (error) return;
-
-    chatStore.wsSend(JSON.stringify({ type: 'stop', _internal_cmd_token: data.cmdToken }));
-
-    list.value[list.value.length - 1].status = 'finished';
-    if (!latestMessage.value.content) list.value.pop();
+  if (data.type === 'chat.accepted') {
+    conversationId.value = data.conversationId;
     return;
   }
 
+  if (data.type === 'chat.delta') {
+    const assistant = getMessageByRequestId(data.requestId);
+    if (!assistant) return;
+
+    assistant.status = 'loading';
+    assistant.content += data.delta;
+    return;
+  }
+
+  if (data.type === 'chat.completed') {
+    const assistant = getMessageByRequestId(data.requestId);
+    if (!assistant) return;
+
+    assistant.finishReason = data.finishReason;
+    assistant.status = data.finishReason === 'completed' ? 'finished' : data.finishReason;
+    if (currentRequestId.value === data.requestId) {
+      currentRequestId.value = '';
+    }
+    return;
+  }
+
+  if (data.type === 'chat.error') {
+    const assistant = getMessageByRequestId(data.requestId || currentRequestId.value);
+    if (assistant) {
+      assistant.status = 'error';
+    }
+    if (!data.requestId || currentRequestId.value === data.requestId) {
+      currentRequestId.value = '';
+    }
+  }
+});
+
+function sendStop() {
+  if (!currentRequestId.value) return;
+
+  const payload: Api.Chat.WsClientMessage = {
+    type: 'chat.stop',
+    requestId: currentRequestId.value
+  };
+  chatStore.wsSend(JSON.stringify(payload));
+}
+
+const handleSend = () => {
+  if (isSending.value && !hasDraft.value) {
+    sendStop();
+    return;
+  }
+
+  const message = input.value.message.trim();
+  if (!message) return;
+
+  const requestId = crypto.randomUUID();
+  currentRequestId.value = requestId;
+
   list.value.push({
-    content: input.value.message,
+    content: message,
     role: 'user'
   });
-  chatStore.wsSend(input.value.message);
   list.value.push({
     content: '',
     role: 'assistant',
+    requestId,
     status: 'pending'
   });
+
+  const payload: Api.Chat.WsClientMessage = {
+    type: 'chat.send',
+    requestId,
+    conversationId: conversationId.value || undefined,
+    message
+  };
+
+  chatStore.wsSend(JSON.stringify(payload));
   input.value.message = '';
 };
 
@@ -104,7 +162,7 @@ const handShortcut = (e: KeyboardEvent) => {
       </div>
       <NButton :disabled="sendable" strong circle type="primary" @click="handleSend">
         <template #icon>
-          <icon-material-symbols:stop-rounded v-if="isSending" />
+          <icon-material-symbols:stop-rounded v-if="actionIcon === 'stop'" />
           <icon-guidance:send v-else />
         </template>
       </NButton>

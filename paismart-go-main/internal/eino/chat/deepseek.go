@@ -100,6 +100,11 @@ func (m *DeepSeekChatModel) Stream(
 	}
 	defer stream.Close()
 
+	go func() {
+		<-ctx.Done()
+		stream.Close()
+	}()
+
 	var fullAnswer strings.Builder
 
 	for {

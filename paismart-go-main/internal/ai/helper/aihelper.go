@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"pai-smart-go/internal/ai/history"
 	einocallbacks "pai-smart-go/internal/eino/callbacks"
@@ -152,7 +153,6 @@ func (h *AIHelper) StreamResponse(
 	user *model.User,
 	userMessage string,
 	writer service.StreamWriter,
-	shouldStop func() bool,
 ) error {
 	if h.chatService == nil {
 		return fmt.Errorf("chat service is nil")
@@ -185,10 +185,13 @@ func (h *AIHelper) StreamResponse(
 		historySnapshot,
 		userMessage,
 		writer,
-		shouldStop,
 	)
 	if err != nil && genResult.Answer == "" {
-		log.Errorf("[AIHelper] 生成失败, session_id=%s, err=%v", h.sessionID, err)
+		if errors.Is(err, context.Canceled) {
+			log.Infof("[AIHelper] 生成已取消, session_id=%s", h.sessionID)
+		} else {
+			log.Errorf("[AIHelper] 生成失败, session_id=%s, err=%v", h.sessionID, err)
+		}
 		return err
 	}
 

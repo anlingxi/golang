@@ -173,10 +173,6 @@ declare namespace Api {
       conversationId?: string;
     }
 
-    interface Output {
-      chunk: string;
-    }
-
     interface Conversation {
       conversationId: string;
     }
@@ -184,13 +180,23 @@ declare namespace Api {
     interface Message {
       role: 'user' | 'assistant';
       content: string;
-      status?: 'pending' | 'loading' | 'finished' | 'error';
+      requestId?: string;
+      finishReason?: 'completed' | 'stopped' | 'superseded';
+      status?: 'pending' | 'loading' | 'finished' | 'error' | 'stopped' | 'superseded';
       timestamp?: string;
     }
 
-    interface Token {
-      cmdToken: string;
-    }
+    type WsClientMessage =
+      | { type: 'chat.send'; requestId: string; conversationId?: string; message: string }
+      | { type: 'chat.stop'; requestId: string }
+      | { type: 'ping' };
+
+    type WsServerMessage =
+      | { type: 'chat.accepted'; requestId: string; conversationId: string }
+      | { type: 'chat.delta'; requestId: string; delta: string; timestamp?: number }
+      | { type: 'chat.completed'; requestId: string; finishReason: 'completed' | 'stopped' | 'superseded'; timestamp?: number }
+      | { type: 'chat.error'; requestId?: string; code: string; message: string; timestamp?: number }
+      | { type: 'pong' };
   }
 
   namespace Document {

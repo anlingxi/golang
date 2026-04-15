@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"pai-smart-go/internal/model"
 	"pai-smart-go/pkg/log"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UploadRepository 接口定义了文件上传相关的数据持久化操作。
@@ -84,25 +86,44 @@ func (r *uploadRepository) UpdateFileUploadStatus(recordID uint, status int) err
 	return r.db.Model(&model.FileUpload{}).Where("id = ?", recordID).Update("status", status).Error
 }
 
-// TryMarkFileProcessing 尝试将文件的处理状态从待处理或失败更新为处理中，确保同一时间只有一个处理器能成功标记并处理该文件。
-// 如何保证的？通过 SQL 的 WHERE 条件限制只有当当前状态是待处理或失败时才允许更新为处理中，并且通过 RowsAffected 判断是否成功更新了记录。
-// 如果返回 true，说明成功标记了文件为处理中；如果返回 false，说明可能已经有其他处理器标记了该文件，当前处理器应该放弃处理。
-// 这是原子操作吗？
+// TryMarkFileProcessing 在事务中通过 SELECT ... FOR UPDATE 锁定 file_upload 记录，
+// 只有当当前状态为 pending/failed 时才允许转移为 processing。
+// 这样“检查状态 + 更新状态”会在同一个事务里完成，避免并发消费者同时抢到处理权。
 func (r *uploadRepository) TryMarkFileProcessing(fileMD5 string, userID uint) (bool, error) {
-	result := r.db.Model(&model.FileUpload{}).
-		Where("file_md5 = ? AND user_id = ? AND process_status IN ?", fileMD5, userID, []int{
-			model.ProcessStatusPending,
-			model.ProcessStatusFailed,
-		}).
-		Updates(map[string]any{
+	var acquired bool
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var record model.FileUpload
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("file_md5 = ? AND user_id = ?", fileMD5, userID).
+			First(&record).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				acquired = false
+				return nil
+			}
+			return err
+		}
+
+		if record.ProcessStatus != model.ProcessStatusPending && record.ProcessStatus != model.ProcessStatusFailed {
+			acquired = false
+			return nil
+		}
+
+		if err := tx.Model(&record).Updates(map[string]any{
 			"process_status": model.ProcessStatusProcessing,
 			"process_stage":  "processing",
 			"process_error":  "",
-		})
-	if result.Error != nil {
-		return false, result.Error
+		}).Error; err != nil {
+			return err
+		}
+
+		acquired = true
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	return result.RowsAffected == 1, nil
+	return acquired, nil
 }
 
 // MarkFileProcessingCompleted 将文件的处理状态更新为完成，并记录分块数量和处理完成时间。

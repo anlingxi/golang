@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/elastic/go-elasticsearch/v8"
+	"golang.org/x/sync/errgroup"
 
 	"pai-smart-go/internal/language/langdetect"
 	"pai-smart-go/internal/model"
@@ -88,23 +89,42 @@ func (s *searchService) HybridSearch(ctx context.Context, query string, topK int
 		recallK = topK
 	}
 
-	queryVector, err := s.embeddingClient.CreateEmbedding(ctx, query)
-	if err != nil {
-		log.Errorf("[SearchService] 向量化查询失败: %v", err)
-		return nil, fmt.Errorf("failed to create query embedding: %w", err)
-	}
-
 	accessFilter := buildAccessFilter(user.ID, userEffectiveTags)
-	knnQuery := buildKNNQuery(queryVector, recallK, accessFilter)
 	bm25Query := buildBM25Query(searchText, phrase, queryLang, recallK, accessFilter)
 
-	knnHits, err := s.executeSearch(ctx, knnQuery)
-	if err != nil {
-		return nil, fmt.Errorf("knn search failed: %w", err)
-	}
-	bm25Hits, err := s.executeSearch(ctx, bm25Query)
-	if err != nil {
-		return nil, fmt.Errorf("bm25 search failed: %w", err)
+	var (
+		knnHits  []esSearchHit
+		bm25Hits []esSearchHit
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		var err error
+		bm25Hits, err = s.executeSearch(gctx, bm25Query)
+		if err != nil {
+			return fmt.Errorf("bm25 search failed: %w", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		queryVector, err := s.embeddingClient.CreateEmbedding(gctx, query)
+		if err != nil {
+			log.Errorf("[SearchService] 向量化查询失败: %v", err)
+			return fmt.Errorf("failed to create query embedding: %w", err)
+		}
+
+		knnQuery := buildKNNQuery(queryVector, recallK, accessFilter)
+		knnHits, err = s.executeSearch(gctx, knnQuery)
+		if err != nil {
+			return fmt.Errorf("knn search failed: %w", err)
+		}
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	fused := fuseHitsByRRF(knnHits, bm25Hits, rrfRankConstant, topK)
@@ -276,6 +296,7 @@ func langToFields(lang string) []string {
 	}
 }
 
+// buildPhraseShould 构建 match_phrase 的 should 条件，用于提升完全匹配的文档得分。
 func buildPhraseShould(phrase string, fields []string) []map[string]any {
 	if strings.TrimSpace(phrase) == "" {
 		return nil
@@ -295,6 +316,7 @@ func buildPhraseShould(phrase string, fields []string) []map[string]any {
 	return should
 }
 
+// fuseHitsByRRF 使用 Reciprocal Rank Fusion (RRF) 算法融合 kNN 和 BM25 的搜索结果。
 func fuseHitsByRRF(knnHits, bm25Hits []esSearchHit, rankConstant float64, topK int) []esSearchHit {
 	type fusedEntry struct {
 		Hit      esSearchHit

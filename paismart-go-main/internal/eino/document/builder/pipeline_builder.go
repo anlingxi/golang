@@ -83,6 +83,7 @@ func NewPipeline(
 					if meta == nil {
 						meta = map[string]any{}
 					}
+					// 个人小作坊的语言检测
 					contentType := langdetect.DetectContentType(doc.Content)
 
 					fields := map[string]es8.FieldValue{

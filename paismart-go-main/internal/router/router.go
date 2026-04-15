@@ -94,12 +94,6 @@ func RegisterRoutes(
 			conversation.GET("", handler.NewConversationHandler(conversationService).GetConversations)
 		}
 
-		// Chat 路由组
-		chatGroup := apiV1.Group("/chat")
-		{
-			chatGroup.GET("/websocket-token", chatHandler.GetWebsocketStopToken)
-		}
-
 		agent := apiV1.Group("/agent")
 		agent.Use(middleware.AuthMiddleware(jwtManager, userService))
 		{

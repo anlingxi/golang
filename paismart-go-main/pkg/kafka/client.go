@@ -4,14 +4,16 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"pai-smart-go/internal/config"
-	"pai-smart-go/pkg/database"
 	"pai-smart-go/pkg/log"
 	"pai-smart-go/pkg/tasks"
 	"time"
 
 	"github.com/segmentio/kafka-go"
+)
+
+const (
+	maxProcessAttempts = 3
 )
 
 // TaskProcessor defines the interface for any service that can process a task.
@@ -60,7 +62,8 @@ func StartConsumer(cfg config.KafkaConfig, processor TaskProcessor) {
 	log.Infof("Kafka 消费者已启动，正在监听主题 '%s'", cfg.Topic)
 
 	for {
-		m, err := r.FetchMessage(context.Background())
+		ctx := context.Background()
+		m, err := r.FetchMessage(ctx)
 		if err != nil {
 			log.Error("从 Kafka 读取消息失败", err)
 			break // 退出循环，可能需要重启策略
@@ -72,41 +75,36 @@ func StartConsumer(cfg config.KafkaConfig, processor TaskProcessor) {
 		if err := json.Unmarshal(m.Value, &task); err != nil {
 			log.Errorf("无法解析 Kafka 消息: %v, value: %s", err, string(m.Value))
 			// 消息格式错误，直接提交，避免阻塞队列
-			if err := r.CommitMessages(context.Background(), m); err != nil {
+			if err := r.CommitMessages(ctx, m); err != nil {
 				log.Errorf("提交错误消息失败: %v", err)
 			}
 			continue
 		}
 
 		log.Infof("开始处理文件任务: MD5=%s, FileName=%s", task.FileMD5, task.FileName)
-		// 同步处理任务
-		if err := processor.Process(context.Background(), task); err != nil {
-			log.Errorf("处理文件任务失败: MD5=%s, Error: %v", task.FileMD5, err)
-			// 使用 Redis 计数失败次数，达到阈值后提交 offset 终止重试
-			attemptsKey := fmt.Sprintf("kafka:attempts:%s", task.FileMD5)
-			attempts, incErr := database.RDB.Incr(context.Background(), attemptsKey).Result()
-			if incErr == nil {
-				_ = database.RDB.Expire(context.Background(), attemptsKey, 24*time.Hour).Err()
-			}
-			if incErr != nil {
-				// Redis 异常时保守处理：不提交 offset，让 Kafka 重试
-				continue
-			}
-			if attempts >= 3 {
-				log.Errorf("文件任务多次失败(>=3)，提交 offset 终止重试: MD5=%s", task.FileMD5)
-				if err := r.CommitMessages(context.Background(), m); err != nil {
+		var processErr error
+		for attempt := 1; attempt <= maxProcessAttempts; attempt++ {
+			processErr = processor.Process(ctx, task)
+			if processErr == nil {
+				log.Infof("文件任务处理成功: MD5=%s, attempt=%d", task.FileMD5, attempt)
+				if err := r.CommitMessages(ctx, m); err != nil {
 					log.Errorf("提交 Kafka 消息 offset 失败: %v", err)
+					processErr = err
+					break
 				}
+				processErr = nil
+				break
 			}
-			// attempts < 3 时，不提交 offset 让 Kafka 自动重试
-		} else {
-			log.Infof("文件任务处理成功: MD5=%s", task.FileMD5)
-			// 清理失败计数
-			_ = database.RDB.Del(context.Background(), fmt.Sprintf("kafka:attempts:%s", task.FileMD5)).Err()
-			// 任务处理成功后，手动提交 offset
-			if err := r.CommitMessages(context.Background(), m); err != nil {
-				log.Errorf("提交 Kafka 消息 offset 失败: %v", err)
+
+			log.Errorf("处理文件任务失败: MD5=%s, attempt=%d/%d, Error: %v", task.FileMD5, attempt, maxProcessAttempts, processErr)
+			if attempt < maxProcessAttempts {
+				time.Sleep(time.Duration(attempt) * time.Second)
 			}
+		}
+
+		if processErr != nil {
+			log.Errorf("文件任务达到最大重试次数，停止消费以避免跳过失败消息: MD5=%s, Error: %v", task.FileMD5, processErr)
+			break
 		}
 	}
 

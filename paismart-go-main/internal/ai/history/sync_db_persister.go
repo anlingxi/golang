@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// 这是一个同步的DB持久化实现，适用于对数据一致性要求较高的场景。每次持久化都会直接写入数据库，并更新缓存中的最近消息。
 type syncDBPersister struct {
 	historyCache cache.HistoryCache
 	sessionRepo  repository.SessionRepository
@@ -33,6 +34,9 @@ func NewSyncDBPersister(
 	}
 }
 
+// 1. 持久化时直接写入数据库，确保数据的一致性和可靠性。
+// 2. 每次持久化后更新缓存中的最近消息，确保用户在短时间内能看到最新的对话内容。
+// 3. 在更新会话的最后消息时间时，如果失败了，不影响主流程，但会记录日志以便排查问题。
 func (p *syncDBPersister) PersistTurn(ctx context.Context, req PersistTurnRequest) error {
 	if len(req.FullMessages) > 0 && p.historyCache != nil {
 		if err := p.historyCache.SetRecentMessages(ctx, req.SessionID, req.FullMessages, p.recentTTL); err != nil {
